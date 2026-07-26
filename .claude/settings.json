@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/path/to/local-agent-gate/target/release/agent-gate hook claude-code",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}
