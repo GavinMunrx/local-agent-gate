@@ -1,0 +1,19 @@
+version: 1
+defaults:
+  lowRisk: allow
+  mediumRisk: ask
+  highRisk: ask
+rules:
+  - id: block-force-push-main
+    match:
+      commandContains: "git push --force"
+      branch: "main"
+    decision: deny
+  - id: ask-package-publish
+    match:
+      commandStartsWith: "npm publish"
+    decision: ask
+  - id: allow-tests
+    match:
+      commandRegex: "^(npm|pnpm|yarn) (test|lint|typecheck)"
+    decision: allow
