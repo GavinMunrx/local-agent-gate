@@ -1,9 +1,10 @@
-use crate::approval::prompt_terminal;
 use crate::audit_store::AuditStore;
+use crate::pending::PendingStore;
 use agent_gate_policy::{
     classify, ActionInfo, AgentInfo, ApprovalRequest, AuditEvent, Decision, PolicyConfig,
     PolicyDecision, ProjectInfo,
 };
+use axum::extract::Path;
 use axum::{extract::State, routing::get, routing::post, Json, Router};
 use chrono::{Duration, Utc};
 use hyper_util::rt::{TokioExecutor, TokioIo};
@@ -17,6 +18,7 @@ const REQUEST_TIMEOUT_SECONDS: i64 = 300;
 
 pub struct AppState {
     pub audit: AuditStore,
+    pub pending: PendingStore,
 }
 
 #[derive(Debug, Deserialize)]
@@ -41,8 +43,36 @@ pub struct SubmitResponse {
     pub risk_reasons: Vec<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DecideRequest {
+    pub decision: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DecideResponse {
+    pub ok: bool,
+}
+
 async fn health() -> &'static str {
     "ok"
+}
+
+async fn list_pending(State(state): State<Arc<AppState>>) -> Json<Vec<ApprovalRequest>> {
+    Json(state.pending.list())
+}
+
+async fn decide_pending(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(payload): Json<DecideRequest>,
+) -> Json<DecideResponse> {
+    let decision = match payload.decision.as_str() {
+        "allow" | "allow_once" => Decision::AllowOnce,
+        _ => Decision::DenyOnce,
+    };
+    let ok = state.pending.decide(&id, decision);
+    Json(DecideResponse { ok })
 }
 
 async fn approve(
@@ -91,12 +121,26 @@ async fn approve(
             format!("Allowed by policy ({})", describe_match(&policy_outcome.matched_rule_ids)),
         ),
         PolicyDecision::Ask => {
-            let decision = prompt_terminal(request.clone()).await;
-            let reason = match decision {
-                Decision::AllowOnce => "Approved from terminal".to_string(),
-                _ => "Denied from terminal".to_string(),
-            };
-            (decision, reason)
+            let request_id = request.id.clone();
+            let rx = state.pending.insert(request.clone());
+            let wait = tokio::time::timeout(
+                std::time::Duration::from_secs(REQUEST_TIMEOUT_SECONDS as u64),
+                rx,
+            )
+            .await;
+            match wait {
+                Ok(Ok(decision)) => {
+                    let reason = match decision {
+                        Decision::AllowOnce => "Approved by an approval surface".to_string(),
+                        _ => "Denied by an approval surface".to_string(),
+                    };
+                    (decision, reason)
+                }
+                _ => {
+                    state.pending.remove(&request_id);
+                    (Decision::Expired, "No approval surface responded before expiry".to_string())
+                }
+            }
         }
     };
 
@@ -138,6 +182,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/approve", post(approve))
+        .route("/pending", get(list_pending))
+        .route("/pending/:id/decide", post(decide_pending))
         .with_state(state)
 }
 

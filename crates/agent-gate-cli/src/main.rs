@@ -21,11 +21,25 @@ enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         command: Vec<String>,
     },
+    /// Interactively decide on pending approvals from the terminal.
+    Approve,
     /// Show recent audit events.
     Audit {
         #[arg(long, default_value_t = 20)]
         limit: i64,
     },
+    /// Agent adapter hooks (invoked by the agent itself, not by a human).
+    Hook {
+        #[command(subcommand)]
+        agent: HookAgent,
+    },
+}
+
+#[derive(Subcommand)]
+enum HookAgent {
+    /// Claude Code `PreToolUse` hook: reads hook JSON on stdin, writes a
+    /// `hookSpecificOutput` decision to stdout.
+    ClaudeCode,
 }
 
 #[tokio::main]
@@ -40,8 +54,17 @@ async fn main() -> anyhow::Result<()> {
             let code = commands::run::run(command).await?;
             std::process::exit(code);
         }
+        Command::Approve => {
+            commands::approve::run().await?;
+        }
         Command::Audit { limit } => {
             commands::audit::run(limit)?;
+        }
+        Command::Hook { agent } => {
+            let code = match agent {
+                HookAgent::ClaudeCode => commands::hook::claude_code().await?,
+            };
+            std::process::exit(code);
         }
     }
 

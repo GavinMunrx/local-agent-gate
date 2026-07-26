@@ -2,3 +2,5 @@
 .DS_Store
 *.db
 *.db-journal
+apps/mac/LocalAgentGateMac/.build
+apps/mac/LocalAgentGateMac/.swiftpm
