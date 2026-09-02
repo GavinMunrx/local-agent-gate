@@ -24,11 +24,25 @@ setup (launchd, local wiring) is deliberately not here.
   `hook claude-code`.
 - 9 unit tests over the classifier and policy precedence.
 
-**MVP 1 — Claude Code adapter.** Complete.
+**MVP 1 / Milestone 3 — agent adapters.** Two agents, one queue.
 
-- `PreToolUse` hook adapter. Reads hook JSON on stdin, forwards `Bash` calls to
-  the daemon, emits `allow`/`deny`/`defer`, always exits 0. Falls back to
-  `defer` when the daemon is unreachable.
+- `PreToolUse` adapters for **Claude Code** (`agent-gate hook claude-code`) and
+  **Codex CLI** (`agent-gate hook codex`). Both read hook JSON on stdin,
+  forward `Bash` calls to the daemon, and always exit 0 - a failing hook must
+  not take the agent down with it.
+- The two contracts are nearly identical, differing in one place: Claude Code
+  has a `defer` decision, Codex documents only `allow` and `deny`. Where Claude
+  Code defers, the Codex adapter omits `permissionDecision` entirely, which
+  leaves Codex's own approval policy in charge. That path is used both when the
+  daemon is unreachable and when a request expires unanswered, so neither agent
+  ever hard-denies work the user was never shown.
+- Verified live: requests from both agents queued simultaneously, were decided
+  independently (one allowed, one denied), each decision returned to the right
+  hook, and the audit log distinguishes them by agent. This is Milestone 3's
+  exit criterion ("at least two AI agents can route approval requests through
+  the same queue").
+- Not yet done from Milestone 3: adapter install/uninstall commands and health
+  checks. Wiring is still hand-edited from `examples/`.
 
 **Structural risk classification.** Complete.
 
@@ -85,9 +99,11 @@ Rough priority, ahead of new milestones:
 
 Then, per the design doc's milestone order:
 
-1. **More adapters (Milestone 3).** Codex CLI and Gemini CLI, integrated
-   through supported config/wrapper points rather than by patching internals.
-   Neither's hook surface has been investigated yet.
+1. **Gemini CLI adapter (rest of Milestone 3).** Gemini's hook surface has not
+   been investigated yet; the design doc suggests wrapper mode unless it has a
+   stable hook surface. Codex turned out to have a `PreToolUse` hook closely
+   matching Claude Code's, so the shared adapter core should extend cheaply if
+   Gemini does too.
 2. **Mac app polish (rest of Milestone 2).** Policy editor UI, local
    notifications for new pending approvals (currently poll-only, no banner),
    app bundle + icon, sign and notarize with a Developer ID, ship a `.dmg`.

@@ -73,15 +73,26 @@ Review what happened:
 ./target/release/agent-gate audit --limit 20
 ```
 
-### Claude Code
+### Agents
 
-Register the `PreToolUse` hook so Bash tool calls route through the gate. For a
-single project, copy [`.claude/settings.json`](.claude/settings.json); to gate
-every project, see [`examples/claude-code-hooks.settings.json`](examples/claude-code-hooks.settings.json)
+Both supported agents expose a `PreToolUse` hook that reads JSON on stdin and
+writes a decision to stdout, so each routes into the same approval queue.
+
+**Claude Code** — register the hook so Bash tool calls route through the gate.
+For a single project, copy [`.claude/settings.json`](.claude/settings.json); to
+gate every project, see
+[`examples/claude-code-hooks.settings.json`](examples/claude-code-hooks.settings.json)
 (which expects `agent-gate` on your `PATH`).
 
-If the daemon is unreachable the hook emits `defer`, so you fall back to Claude
-Code's own permission prompts rather than losing the ability to run anything.
+**Codex CLI** — merge
+[`examples/codex-hooks.config.toml`](examples/codex-hooks.config.toml) into your
+user-level `~/.codex/config.toml`.
+
+If the daemon is unreachable, or a request expires with nobody watching an
+approval surface, the hook declines to decide and the agent falls back to its
+own permission prompt. It never denies work the user was never shown. Claude
+Code spells that `defer`; Codex has no such value, so the adapter omits the
+decision field instead.
 
 > The project-scoped hook points at `target/release/agent-gate`. After changing
 > Rust code, re-run `cargo build --release` or the hook keeps running stale logic.

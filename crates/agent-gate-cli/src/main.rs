@@ -40,6 +40,9 @@ enum HookAgent {
     /// Claude Code `PreToolUse` hook: reads hook JSON on stdin, writes a
     /// `hookSpecificOutput` decision to stdout.
     ClaudeCode,
+    /// Codex CLI `PreToolUse` hook, same contract as Claude Code's except
+    /// that Codex has no "defer" decision.
+    Codex,
 }
 
 #[tokio::main]
@@ -62,7 +65,10 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Hook { agent } => {
             let code = match agent {
-                HookAgent::ClaudeCode => commands::hook::claude_code().await?,
+                HookAgent::ClaudeCode => {
+                    commands::hook::run(commands::hook::Adapter::ClaudeCode).await?
+                }
+                HookAgent::Codex => commands::hook::run(commands::hook::Adapter::Codex).await?,
             };
             std::process::exit(code);
         }

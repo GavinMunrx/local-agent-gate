@@ -1,0 +1,22 @@
+# Route Codex CLI's Bash tool calls through Local Agent Gate.
+#
+# Merge this into your user-level Codex config at ~/.codex/config.toml.
+# Codex also supports a separate hooks.json file, but inline [hooks] tables and
+# hooks.json cannot coexist in the same layer - pick one. Project-local hooks
+# under .codex/ load only when that layer is trusted.
+#
+# `matcher` is a regular expression, unlike Claude Code's plain string.
+#
+# `timeout` must exceed the daemon's request expiry (120s by default), or Codex
+# kills the hook before the daemon's expiry response arrives and the request is
+# orphaned. If Codex caps the hook timeout below that, lower the daemon's
+# request_timeout_seconds to match instead.
+
+[[hooks.PreToolUse]]
+matcher = "^Bash$"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "agent-gate hook codex"
+timeout = 130
+statusMessage = "Checking with Local Agent Gate"
