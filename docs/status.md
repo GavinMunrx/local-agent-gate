@@ -30,6 +30,25 @@ setup (launchd, local wiring) is deliberately not here.
   the daemon, emits `allow`/`deny`/`defer`, always exits 0. Falls back to
   `defer` when the daemon is unreachable.
 
+**Structural risk classification.** Complete.
+
+- Commands are parsed into pipelines and simple commands before classification,
+  and each is judged on its own program name and arguments. Previously the
+  classifier regexed the raw string, so it could not tell a command from text
+  quoting one.
+- Quoting, heredocs, redirection, pipelines and command substitution are all
+  resolved. A heredoc body is data, not commands - which is what stops writing
+  a file *about* dangerous commands from being classified as running them.
+- Wrappers (`sudo`, `xargs`, `env`, ...) are stripped so the wrapped command is
+  judged, and `sh -c` / `eval` arguments are recursively classified, since those
+  really are code.
+- Cross-command risks that only exist as data flow are evaluated per pipeline:
+  a secret read piped into a network tool, or a substitution that reads a
+  credential file.
+- Verified against the live daemon across 23 cases: every catastrophic example
+  still blocks, every risk level is unchanged, and commands that merely quote
+  dangerous text now rate low.
+
 **Request lifecycle hardening.** Complete.
 
 - A background reaper sweeps expired requests out of the pending queue and
@@ -61,11 +80,6 @@ setup (launchd, local wiring) is deliberately not here.
 
 Rough priority, ahead of new milestones:
 
-- **Classifier code-vs-data confusion.** See Known limitations. This is now the
-  most disruptive open issue in practice: during the session that verified the
-  Mac app, two of the operator's own commands were gated purely because their
-  text quoted dangerous commands as test data. One had to be approved by hand
-  to let ordinary work continue.
 - **Adapter install UX.** `agent-gate adapters install claude-code` does not
   exist; wiring is hand-edited today.
 
@@ -102,16 +116,15 @@ Then, per the design doc's milestone order:
   command `high` rather than `blocked`. Still denied by default either way
   (fail closed), but the `blocked` label won't always fire. The design doc
   explicitly accepts this class of shell-parsing imperfection for MVP.
-- **No distinction between a command and text quoting one.** The classifier
-  regexes the raw command string, so it fires on a command that merely *contains*
-  a dangerous string — writing a file whose contents mention `rm -rf` gets
-  blocked. This cuts the safe way too (a payload buried in a compound command is
-  still caught), but the false positives are frequent enough during ordinary
-  work to need addressing.
-- **`argv` is not a real shell parse.** Compound commands are split naively, so
-  the field is unreliable for anything with `&&`, `;`, or pipes. Classification
-  does not depend on it, but `commandStartsWith` policy rules effectively assume
-  a single simple command.
+- **The shell parser is deliberately partial.** It handles quoting, heredocs,
+  redirection, pipelines and command substitution, but ignores parameter
+  expansion, arithmetic, process substitution and control-flow keywords. A
+  command hidden behind an expanded variable is not seen as a command. Unknown
+  programs still default to medium risk, so the failure mode stays fail-safe.
+- **`argv` on the wire is still a naive split.** The daemon records the adapter's
+  own argv, not the parser's, so the audit field is unreliable for compound
+  commands. Classification no longer depends on it, but `commandStartsWith`
+  policy rules effectively assume a single simple command.
 - **A decision on an orphaned request is silently dropped.** If the submitting
   client has disconnected, `POST /pending/:id/decide` returns `ok: false` and
   records nothing. The window is small (the reaper clears orphans within one

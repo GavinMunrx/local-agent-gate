@@ -1,5 +1,6 @@
 pub mod classifier;
 pub mod policy;
+pub mod shell;
 pub mod types;
 
 pub use classifier::classify;
