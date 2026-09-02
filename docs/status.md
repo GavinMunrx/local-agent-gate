@@ -43,19 +43,29 @@ setup (launchd, local wiring) is deliberately not here.
   regression test that abandons a handler mid-flight the way a killed adapter
   does.
 
-**MVP 2 — Mac app.** Partial.
+**MVP 2 — Mac app.** Partial, but the core loop is verified.
 
 - Menu bar app (SwiftPM executable, no Xcode project). Polls the daemon every
   2s over the Unix socket via a hand-rolled POSIX socket + HTTP/1.1 client,
   since URLSession has no UDS support. Lists pending approvals with per-item
   Allow/Deny, shows daemon status, opens an audit log window.
+- **Human-verified 2026-09-02.** A person clicked Allow on four queued
+  approvals and Deny on a fifth, from the real menu bar. Each waiting client
+  received its decision, and every click produced an audit receipt with the
+  right risk level. This is Milestone 2's exit criterion ("user can install
+  app, start daemon, approve from menu bar") met for the first time.
+- Still unverified by a human: the audit log window, and behaviour when the
+  daemon is stopped underneath a running app.
 
 ## Next
 
 Rough priority, ahead of new milestones:
 
-- **Human-verify the Mac app.** Its socket client, JSON decoding, and decide
-  flow were confirmed programmatically, but nobody has clicked the real menu.
+- **Classifier code-vs-data confusion.** See Known limitations. This is now the
+  most disruptive open issue in practice: during the session that verified the
+  Mac app, two of the operator's own commands were gated purely because their
+  text quoted dangerous commands as test data. One had to be approved by hand
+  to let ordinary work continue.
 - **Adapter install UX.** `agent-gate adapters install claude-code` does not
   exist; wiring is hand-edited today.
 
