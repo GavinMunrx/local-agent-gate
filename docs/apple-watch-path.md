@@ -69,8 +69,10 @@ and the furthest from the product's stance.
 
 ### 5. watchOS background refresh
 
-Budgeted at roughly one wake every 15-60 minutes. The request expiry is 120
-seconds. Not viable, at any amount of effort.
+Budgeted at roughly one wake every 15-60 minutes. Even with the request TTL
+now at 600 seconds, a wake can easily land after the request is gone, and the
+agent stopped waiting eight minutes earlier. Not viable, at any amount of
+effort.
 
 ## What this means for the product
 
