@@ -68,13 +68,20 @@ enum AdapterAction {
 enum AgentName {
     ClaudeCode,
     Codex,
+    Cursor,
+    GeminiCli,
+    Antigravity,
 }
 
 impl AgentName {
     fn adapter(self) -> commands::hook::Adapter {
+        use commands::hook::Adapter;
         match self {
-            AgentName::ClaudeCode => commands::hook::Adapter::ClaudeCode,
-            AgentName::Codex => commands::hook::Adapter::Codex,
+            AgentName::ClaudeCode => Adapter::ClaudeCode,
+            AgentName::Codex => Adapter::Codex,
+            AgentName::Cursor => Adapter::Cursor,
+            AgentName::GeminiCli => Adapter::GeminiCli,
+            AgentName::Antigravity => Adapter::Antigravity,
         }
     }
 }
@@ -87,6 +94,12 @@ enum HookAgent {
     /// Codex CLI `PreToolUse` hook, same contract as Claude Code's except
     /// that Codex has no "defer" decision.
     Codex,
+    /// Cursor `beforeShellExecution` hook.
+    Cursor,
+    /// Gemini CLI `BeforeTool` hook for `run_shell_command`.
+    GeminiCli,
+    /// Antigravity `PreToolUse` hook for `run_command`.
+    Antigravity,
 }
 
 #[tokio::main]
@@ -143,6 +156,13 @@ async fn main() -> anyhow::Result<()> {
                     commands::hook::run(commands::hook::Adapter::ClaudeCode).await?
                 }
                 HookAgent::Codex => commands::hook::run(commands::hook::Adapter::Codex).await?,
+                HookAgent::Cursor => commands::hook::run(commands::hook::Adapter::Cursor).await?,
+                HookAgent::GeminiCli => {
+                    commands::hook::run(commands::hook::Adapter::GeminiCli).await?
+                }
+                HookAgent::Antigravity => {
+                    commands::hook::run(commands::hook::Adapter::Antigravity).await?
+                }
             };
             std::process::exit(code);
         }

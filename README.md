@@ -75,39 +75,42 @@ Review what happened:
 
 ### Agents
 
-Both supported agents expose a `PreToolUse` hook that reads JSON on stdin and
-writes a decision to stdout, so each routes into the same approval queue.
+Five agents are supported. Each exposes a pre-execution hook, but no two agree
+on the shape of the payload or the vocabulary of the answer, so the adapter
+translates in both directions:
 
-**Claude Code** — register the hook so Bash tool calls route through the gate.
-For a single project, copy [`.claude/settings.json`](.claude/settings.json); to
-gate every project, see
-[`examples/claude-code-hooks.settings.json`](examples/claude-code-hooks.settings.json)
-(which expects `agent-gate` on your `PATH`).
+| Agent | Hook event | Config |
+| --- | --- | --- |
+| Claude Code | `PreToolUse` (`Bash`) | `.claude/settings.json` |
+| Codex CLI | `PreToolUse` (`^Bash$`) | `~/.codex/config.toml` |
+| Cursor | `beforeShellExecution` | `.cursor/hooks.json` |
+| Gemini CLI | `BeforeTool` (`run_shell_command`) | `.gemini/settings.json` |
+| Antigravity | `PreToolUse` (`run_command`) | `.agents/hooks.json` |
 
-**Codex CLI** — merge
-[`examples/codex-hooks.config.toml`](examples/codex-hooks.config.toml) into your
-user-level `~/.codex/config.toml`.
-
-Or let the CLI do the wiring:
+Let the CLI do the wiring:
 
 ```sh
-agent-gate adapters list                    # who is wired up, and is the daemon live
-agent-gate adapters install claude-code     # this project
-agent-gate adapters install codex --global  # ~/.codex/config.toml
+agent-gate adapters list                     # who is wired up, and is the daemon live
+agent-gate adapters install claude-code      # this project
+agent-gate adapters install cursor --global  # ~/.cursor/hooks.json
 agent-gate adapters uninstall codex --global
 ```
 
 Installing backs the file up first, preserves everything else in it (including
-TOML comments), and is a no-op if the hook is already there.
+TOML comments), and is a no-op if the hook is already there. Uninstalling
+removes only hooks pointing at this binary, so another tool's hooks survive.
+To wire things by hand instead, see [`examples/`](examples).
 
 If the daemon is unreachable, or a request expires with nobody watching an
 approval surface, the hook declines to decide and the agent falls back to its
-own permission prompt. It never denies work the user was never shown. Claude
-Code spells that `defer`; Codex has no such value, so the adapter omits the
-decision field instead.
+own permission prompt. It never denies work the user was never shown. Each
+agent spells that differently - `defer` for Claude Code, `ask` for Cursor and
+Antigravity, an omitted field for Codex, an empty object for Gemini.
 
-> The project-scoped hook points at `target/release/agent-gate`. After changing
-> Rust code, re-run `cargo build --release` or the hook keeps running stale logic.
+**Gemini caveat:** its `BeforeTool` hook can deny or rewrite a call but has no
+way to say "approved, skip your own confirmation". An allow is therefore
+indistinguishable from no opinion, so Gemini still runs its normal approval
+prompt for commands the gate allowed. Denials work fully.
 
 ### Policy
 
