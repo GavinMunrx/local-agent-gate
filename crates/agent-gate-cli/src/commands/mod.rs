@@ -1,3 +1,4 @@
+pub mod adapters;
 pub mod approve;
 pub mod audit;
 pub mod daemon;

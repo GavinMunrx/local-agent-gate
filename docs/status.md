@@ -41,8 +41,13 @@ setup (launchd, local wiring) is deliberately not here.
   hook, and the audit log distinguishes them by agent. This is Milestone 3's
   exit criterion ("at least two AI agents can route approval requests through
   the same queue").
-- Not yet done from Milestone 3: adapter install/uninstall commands and health
-  checks. Wiring is still hand-edited from `examples/`.
+- `agent-gate adapters list | install | uninstall` manages the wiring, which
+  completes Milestone 3. Writes are conservative because both config files are
+  ones the user edits by hand: the file is backed up first, unrelated content
+  survives (TOML comments and tables included, via `toml_edit` rather than a
+  reparse), installing twice is a no-op, and uninstall removes only hooks that
+  point at this binary. `list` doubles as the health check, using `/pending`
+  rather than `/health` so a stale socket file cannot read as a live daemon.
 
 **Structural risk classification.** Complete.
 

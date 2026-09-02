@@ -17,3 +17,4 @@ serde_json.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 shell-words.workspace = true
+toml_edit.workspace = true

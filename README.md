@@ -88,6 +88,18 @@ gate every project, see
 [`examples/codex-hooks.config.toml`](examples/codex-hooks.config.toml) into your
 user-level `~/.codex/config.toml`.
 
+Or let the CLI do the wiring:
+
+```sh
+agent-gate adapters list                    # who is wired up, and is the daemon live
+agent-gate adapters install claude-code     # this project
+agent-gate adapters install codex --global  # ~/.codex/config.toml
+agent-gate adapters uninstall codex --global
+```
+
+Installing backs the file up first, preserves everything else in it (including
+TOML comments), and is a no-op if the hook is already there.
+
 If the daemon is unreachable, or a request expires with nobody watching an
 approval surface, the hook declines to decide and the agent falls back to its
 own permission prompt. It never denies work the user was never shown. Claude

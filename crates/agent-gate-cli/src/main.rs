@@ -28,11 +28,55 @@ enum Command {
         #[arg(long, default_value_t = 20)]
         limit: i64,
     },
+    /// Install, remove, or inspect the agent hook wiring.
+    Adapters {
+        #[command(subcommand)]
+        action: AdapterAction,
+    },
     /// Agent adapter hooks (invoked by the agent itself, not by a human).
     Hook {
         #[command(subcommand)]
         agent: HookAgent,
     },
+}
+
+#[derive(Subcommand)]
+enum AdapterAction {
+    /// Show which agents are wired up, and where.
+    List,
+    /// Wire an agent's PreToolUse hook to this gate.
+    Install {
+        #[arg(value_enum)]
+        agent: AgentName,
+        /// Install into the user's global agent config rather than this project.
+        #[arg(long)]
+        global: bool,
+        /// Hook timeout in seconds. Must exceed the daemon's request expiry.
+        #[arg(long, default_value_t = 130)]
+        timeout: u64,
+    },
+    /// Remove this gate's hook from an agent's config.
+    Uninstall {
+        #[arg(value_enum)]
+        agent: AgentName,
+        #[arg(long)]
+        global: bool,
+    },
+}
+
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+enum AgentName {
+    ClaudeCode,
+    Codex,
+}
+
+impl AgentName {
+    fn adapter(self) -> commands::hook::Adapter {
+        match self {
+            AgentName::ClaudeCode => commands::hook::Adapter::ClaudeCode,
+            AgentName::Codex => commands::hook::Adapter::Codex,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -62,6 +106,36 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Audit { limit } => {
             commands::audit::run(limit)?;
+        }
+        Command::Adapters { action } => {
+            let project = std::env::current_dir()?;
+            match action {
+                AdapterAction::List => commands::adapters::list(&project).await?,
+                AdapterAction::Install {
+                    agent,
+                    global,
+                    timeout,
+                } => {
+                    let scope = if global {
+                        commands::adapters::Scope::Global
+                    } else {
+                        commands::adapters::Scope::Project
+                    };
+                    let target =
+                        commands::adapters::Target::resolve(agent.adapter(), scope, &project)?;
+                    commands::adapters::install(&target, timeout)?;
+                }
+                AdapterAction::Uninstall { agent, global } => {
+                    let scope = if global {
+                        commands::adapters::Scope::Global
+                    } else {
+                        commands::adapters::Scope::Project
+                    };
+                    let target =
+                        commands::adapters::Target::resolve(agent.adapter(), scope, &project)?;
+                    commands::adapters::uninstall(&target)?;
+                }
+            }
         }
         Command::Hook { agent } => {
             let code = match agent {
