@@ -10,15 +10,39 @@ enum DaemonPaths {
         "\(appSupportDir)/agent-gate.sock"
     }
 
-    /// Locates the `agent-gate` CLI binary next to this development checkout,
-    /// preferring a release build if one has been produced.
-    static var cliBinaryPath: String {
-        let repoTarget = "/path/to/local-agent-gate/target"
-        let release = "\(repoTarget)/release/agent-gate"
-        let debug = "\(repoTarget)/debug/agent-gate"
-        if FileManager.default.isExecutableFile(atPath: release) {
-            return release
+    /// Repo root found by walking up from this executable, which in a
+    /// development checkout lives under `<repo>/apps/mac/LocalAgentGateMac/.build/...`.
+    /// The exact depth varies (SwiftPM nests a target triple), so look for the
+    /// workspace manifest rather than counting path components.
+    private static var checkoutRoot: String? {
+        var url = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
+        while url.path != "/" {
+            url.deleteLastPathComponent()
+            if FileManager.default.fileExists(atPath: url.appendingPathComponent("Cargo.toml").path) {
+                return url.path
+            }
         }
-        return debug
+        return nil
+    }
+
+    /// Locates the `agent-gate` CLI binary, preferring an explicit override,
+    /// then a build next to this development checkout, then an installed copy.
+    static var cliBinaryPath: String {
+        var candidates: [String] = []
+        if let override = ProcessInfo.processInfo.environment["AGENT_GATE_CLI"] {
+            candidates.append(override)
+        }
+        if let root = checkoutRoot {
+            candidates += [
+                "\(root)/target/release/agent-gate",
+                "\(root)/target/debug/agent-gate",
+            ]
+        }
+        candidates += [
+            "/usr/local/bin/agent-gate",
+            "/opt/homebrew/bin/agent-gate",
+        ]
+        return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
+            ?? "agent-gate"
     }
 }
