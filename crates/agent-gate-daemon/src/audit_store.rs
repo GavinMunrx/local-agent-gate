@@ -118,6 +118,7 @@ fn parse_decision(s: &str) -> Decision {
         "block_similar" => Decision::BlockSimilar,
         "auto_allowed" => Decision::AutoAllowed,
         "auto_blocked" => Decision::AutoBlocked,
+        "no_decision_yet" => Decision::NoDecisionYet,
         _ => Decision::Expired,
     }
 }

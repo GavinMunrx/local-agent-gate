@@ -8,6 +8,13 @@ pub struct PendingStore {
     entries: Mutex<HashMap<String, Entry>>,
 }
 
+/// The outcome of deciding a pending request.
+pub struct Decided {
+    pub request: ApprovalRequest,
+    /// Whether a still-waiting agent received the decision.
+    pub delivered: bool,
+}
+
 struct Entry {
     request: ApprovalRequest,
     responder: oneshot::Sender<Decision>,
@@ -74,14 +81,22 @@ impl PendingStore {
             .collect()
     }
 
-    /// Removes the entry and sends the decision. Returns `false` if no
-    /// matching pending entry was found (already decided or expired).
-    pub fn decide(&self, id: &str, decision: Decision) -> bool {
-        let entry = self.entries.lock().expect("pending store lock poisoned").remove(id);
-        match entry {
-            Some(entry) => entry.responder.send(decision).is_ok(),
-            None => false,
-        }
+    /// Removes the entry and sends the decision.
+    ///
+    /// Returns the request that was decided, or `None` if no matching entry
+    /// existed. `delivered` says whether a waiting agent actually received the
+    /// decision: once the agent has stopped waiting the request stays
+    /// answerable, so a human decision still has to be recorded even though
+    /// nobody is listening for it.
+    pub fn decide(&self, id: &str, decision: Decision) -> Option<Decided> {
+        let entry = self
+            .entries
+            .lock()
+            .expect("pending store lock poisoned")
+            .remove(id)?;
+        let request = entry.request;
+        let delivered = entry.responder.send(decision).is_ok();
+        Some(Decided { request, delivered })
     }
 }
 

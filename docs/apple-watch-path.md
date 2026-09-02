@@ -94,15 +94,18 @@ silently:
 
 ## Two design problems the Watch surfaces early
 
-**The expiry window is too short for a human who has walked away.** 120
-seconds is tuned so an adapter's hook does not hang. But a notification is
-worth little if the request dies before a wrist is raised. These are different
-timeouts pretending to be one: how long the *agent* waits, and how long the
-*request* stays answerable. Splitting them - let the agent fall through to its
-own prompt quickly, while the request stays live and answerable for longer,
-with the decision recorded as a policy update rather than an execution
-approval - is probably the right model, and it is a daemon change, not a Watch
-change.
+**The expiry window was too short for a human who has walked away.** ~~120
+seconds~~ *Done.* The single timeout has been split: `agent_wait_seconds`
+(120s) is how long the agent blocks before falling back to its own prompt, and
+`request_ttl_seconds` (600s) is how long the request stays answerable
+afterwards. A late decision is recorded with a receipt noting the agent had
+already moved on.
+
+What a late decision *means* is still open. It cannot retroactively allow
+execution - the agent has moved on - so it is currently an audit record of
+intent. Turning it into a policy update ("allow commands like this next time")
+is the natural next step and is what would make a Watch tap genuinely useful
+rather than merely informative.
 
 **The Watch is a bad place to approve high-risk work.** A 40mm screen cannot
 show enough of a command to judge it, and the design doc's instinct to

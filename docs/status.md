@@ -83,7 +83,15 @@ setup (launchd, local wiring) is deliberately not here.
   common case, because a disconnecting client causes hyper to drop the in-flight
   future along with any cleanup behind it. Symptom before the fix: expired
   requests accumulated in `/pending` indefinitely and left no audit trail.
-- Request expiry and the reap interval are configurable on `DaemonConfig`.
+- **Two timeouts, not one.** `agent_wait_seconds` (120s) is how long an
+  agent's hook blocks before falling back to its own prompt;
+  `request_ttl_seconds` (600s) is how long the request stays answerable by a
+  human afterwards. They were one value, which meant a request died at the
+  moment the agent gave up - fine at a desk, useless for a notification that
+  has to reach a phone or watch first.
+- A decision that arrives after the agent stopped waiting is still recorded,
+  with the receipt saying so. Before the split that was a rare race; it is now
+  the normal path for anything approved away from the Mac.
 - 8 daemon integration tests drive the HTTP API in-process, including a
   regression test that abandons a handler mid-flight the way a killed adapter
   does.
@@ -141,10 +149,11 @@ approve commands, so a user-owned tunnel is safer than an open LAN.
 
 ## Operational notes
 
-- **Adapter timeouts must exceed the daemon's expiry window.** The daemon
-  defaults to a 120s request expiry; the Claude Code hook is configured at 130s.
-  If the hook's timeout is the shorter of the two, it is killed before the
-  daemon's expiry response arrives and every unanswered request orphans.
+- **Adapter timeouts must exceed the daemon's agent wait.** The daemon waits
+  120s before telling an agent to fall back; hooks are configured at 130s. If a
+  hook's timeout is the shorter of the two, it is killed before the daemon's
+  response arrives and the request orphans. The request TTL (600s) is
+  deliberately longer than both and does not constrain hook timeouts.
 - **Rebuilding the release binary breaks the running LaunchAgent.** launchd
   caches the code signature, so after `cargo build --release` a
   `launchctl kickstart -k` fails with `OS_REASON_CODESIGNING`. A full
@@ -166,7 +175,7 @@ approve commands, so a user-owned tunnel is safer than an open LAN.
   own argv, not the parser's, so the audit field is unreliable for compound
   commands. Classification no longer depends on it, but `commandStartsWith`
   policy rules effectively assume a single simple command.
-- **A decision on an orphaned request is silently dropped.** If the submitting
-  client has disconnected, `POST /pending/:id/decide` returns `ok: false` and
-  records nothing. The window is small (the reaper clears orphans within one
-  interval) but it is not zero.
+- **A decision on an already-reaped request is dropped.** Once the reaper has
+  expired a request at its TTL, `POST /pending/:id/decide` returns `ok: false`.
+  Decisions arriving before that are recorded whether or not an agent is still
+  listening.

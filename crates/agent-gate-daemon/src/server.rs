@@ -26,7 +26,13 @@ use tower::Service;
 pub struct AppState {
     pub audit: AuditStore,
     pub pending: PendingStore,
-    pub request_timeout_seconds: i64,
+    /// How long an agent's hook blocks waiting for a decision before falling
+    /// back to the agent's own prompt.
+    pub agent_wait_seconds: i64,
+    /// How long the request stays answerable by a human afterwards. Longer
+    /// than the agent wait: a notification is worth little if the request dies
+    /// before someone can look at it.
+    pub request_ttl_seconds: i64,
     /// Bearer token required on network listeners. The Unix socket is exempt:
     /// reaching it already implies local access as this user.
     pub token: String,
@@ -92,9 +98,38 @@ async fn decide_pending(
         "allow" | "allow_once" => Decision::AllowOnce,
         _ => Decision::DenyOnce,
     };
-    let ok = state.pending.decide(&id, decision);
-    if ok {
+    let outcome = state.pending.decide(&id, decision);
+    let ok = outcome.is_some();
+    if let Some(decided) = outcome {
         state.notify_change();
+        // If the agent is still waiting, its own handler writes the audit
+        // event. If it has already fallen back, nobody else will - and a human
+        // decision must never go unrecorded just because it arrived late.
+        if !decided.delivered {
+            let now = Utc::now();
+            let request = decided.request;
+            let event = AuditEvent {
+                id: agent_gate_policy::new_id("evt"),
+                request_id: request.id.clone(),
+                timestamp: now,
+                agent_id: request.agent.id.clone(),
+                project_path: request.project.path.clone(),
+                command: request.action.command.clone(),
+                risk_level: request.risk.level,
+                decision,
+                reason: format!(
+                    "{} (recorded after the agent stopped waiting)",
+                    match decision {
+                        Decision::AllowOnce => "Approved by an approval surface",
+                        _ => "Denied by an approval surface",
+                    }
+                ),
+                duration_ms: (now - request.created_at).num_milliseconds(),
+            };
+            if let Err(err) = state.audit.insert(&event) {
+                eprintln!("failed to persist late decision: {err:#}");
+            }
+        }
     }
     Json(DecideResponse { ok })
 }
@@ -117,7 +152,7 @@ async fn approve(
     let request = ApprovalRequest {
         id: agent_gate_policy::new_id("req"),
         created_at: now,
-        expires_at: now + Duration::seconds(state.request_timeout_seconds),
+        expires_at: now + Duration::seconds(state.request_ttl_seconds),
         agent: payload.agent.clone(),
         project: ProjectInfo {
             path: payload.project_path.clone(),
@@ -148,7 +183,7 @@ async fn approve(
             let rx = state.pending.insert(request.clone());
             state.notify_change();
             let wait = tokio::time::timeout(
-                std::time::Duration::from_secs(state.request_timeout_seconds.max(0) as u64),
+                std::time::Duration::from_secs(state.agent_wait_seconds.max(0) as u64),
                 rx,
             )
             .await;
@@ -160,11 +195,14 @@ async fn approve(
                     };
                     (decision, reason)
                 }
-                // Expiry is the reaper's job alone. Cleaning up here too would
-                // race it into a duplicate audit event, and would not run at all
-                // in the common case: a disconnected client's handler is dropped
-                // mid-await and never reaches this arm.
-                _ => (Decision::Expired, crate::reaper::EXPIRY_REASON.to_string()),
+                // The agent gives up before the request does. The entry stays
+                // in the queue, answerable by a human, until the reaper expires
+                // it at its TTL - so nothing is cleaned up or audited here.
+                _ => (
+                    Decision::NoDecisionYet,
+                    "No approval surface responded in time; the request remains answerable"
+                        .to_string(),
+                ),
             }
         }
     };
@@ -182,7 +220,7 @@ async fn approve(
         reason: reason.clone(),
         duration_ms: (decided_at - now).num_milliseconds(),
     };
-    if decision != Decision::Expired {
+    if !matches!(decision, Decision::Expired | Decision::NoDecisionYet) {
         if let Err(err) = state.audit.insert(&event) {
             eprintln!("failed to persist audit event: {err:#}");
         }

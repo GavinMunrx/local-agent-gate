@@ -94,6 +94,9 @@ pub enum Decision {
     AllowSimilar,
     BlockSimilar,
     Expired,
+    /// The agent stopped waiting, but the request is still answerable by a
+    /// human. Distinct from `Expired`, which means the request itself died.
+    NoDecisionYet,
     AutoAllowed,
     AutoBlocked,
 }
@@ -106,6 +109,7 @@ impl std::fmt::Display for Decision {
             Decision::AllowSimilar => "allow_similar",
             Decision::BlockSimilar => "block_similar",
             Decision::Expired => "expired",
+            Decision::NoDecisionYet => "no_decision_yet",
             Decision::AutoAllowed => "auto_allowed",
             Decision::AutoBlocked => "auto_blocked",
         };

@@ -22,14 +22,19 @@ struct Harness {
     dir: tempfile::TempDir,
 }
 
-fn harness(request_timeout_seconds: i64) -> Harness {
+fn harness(agent_wait_seconds: i64) -> Harness {
+    harness_with(agent_wait_seconds, 600)
+}
+
+fn harness_with(agent_wait_seconds: i64, request_ttl_seconds: i64) -> Harness {
     let dir = tempfile::tempdir().expect("tempdir");
     let audit = AuditStore::open(&dir.path().join("audit.db")).expect("audit store");
     let (changes, _) = tokio::sync::broadcast::channel(16);
     let state = Arc::new(AppState {
         audit,
         pending: PendingStore::new(),
-        request_timeout_seconds,
+        agent_wait_seconds,
+        request_ttl_seconds,
         token: TOKEN.to_string(),
         changes,
     });
@@ -161,7 +166,7 @@ async fn pending_request_is_listed_then_approved() {
 /// `/pending` forever and leave no audit trail at all.
 #[tokio::test]
 async fn abandoned_request_is_reaped_and_audited() {
-    let h = harness(120);
+    let h = harness_with(120, 120);
     let submission = h.submission("some-unknown-tool --flag");
 
     // Drive the handler until it parks, then drop it - exactly what a client
@@ -185,10 +190,10 @@ async fn abandoned_request_is_reaped_and_audited() {
 /// and it has to be the reaper, since the handler is often already gone.
 #[tokio::test]
 async fn expiry_is_audited_exactly_once_when_client_stays_connected() {
-    let h = harness(0);
+    let h = harness_with(0, 0);
     let body = h.call("POST", "/approve", h.submission("some-unknown-tool --flag")).await;
 
-    assert_eq!(body["decision"], json!("expired"));
+    assert_eq!(body["decision"], json!("no_decision_yet"));
     assert!(h.decisions().is_empty(), "the handler must leave auditing to the reaper");
 
     assert_eq!(reaper::reap_at(&h.state, Utc::now()), 1);
@@ -305,4 +310,82 @@ async fn queue_changes_are_broadcast_to_subscribers() {
 
     let signalled = tokio::time::timeout(std::time::Duration::from_millis(500), events.recv()).await;
     assert!(signalled.is_ok(), "parking a request must notify subscribers");
+}
+
+// -------------------------------------------------- agent wait vs request TTL
+
+/// The agent and the request must not share a deadline. The agent falls back
+/// to its own prompt quickly; the request stays answerable long enough for a
+/// human to be notified, look, and decide.
+#[tokio::test]
+async fn agent_gives_up_but_the_request_stays_answerable() {
+    let h = harness_with(0, 600); // agent waits no time; request lives 10 min
+    let body = h.call("POST", "/approve", h.submission("some-unknown-tool --flag")).await;
+
+    assert_eq!(body["decision"], json!("no_decision_yet"));
+    assert_eq!(h.state.pending.len(), 1, "the request must outlive the agent's wait");
+    assert_eq!(
+        reaper::reap_at(&h.state, Utc::now() + Duration::seconds(60)),
+        0,
+        "still well inside its TTL"
+    );
+    assert_eq!(h.state.pending.len(), 1);
+
+    // ...and it does eventually die.
+    assert_eq!(reaper::reap_at(&h.state, Utc::now() + Duration::seconds(601)), 1);
+    assert_eq!(h.decisions(), vec![Decision::Expired]);
+}
+
+/// A decision made after the agent stopped waiting still has to be recorded.
+/// Before the split this was a rare race; now it is the normal path for
+/// anything approved from a phone.
+#[tokio::test]
+async fn a_late_decision_is_still_audited() {
+    let h = harness_with(0, 600);
+    let body = h.call("POST", "/approve", h.submission("some-unknown-tool --flag")).await;
+    assert_eq!(body["decision"], json!("no_decision_yet"));
+    assert!(h.decisions().is_empty());
+
+    let id = h.state.pending.list()[0].id.clone();
+    let decided = h
+        .call("POST", &format!("/pending/{id}/decide"), json!({ "decision": "allow" }))
+        .await;
+
+    assert_eq!(decided["ok"], json!(true), "a late decision must be accepted");
+    assert!(h.state.pending.is_empty());
+    assert_eq!(h.decisions(), vec![Decision::AllowOnce]);
+    let event = &h.state.audit.recent(1).unwrap()[0];
+    assert!(
+        event.reason.contains("after the agent stopped waiting"),
+        "the receipt should say the agent had already moved on: {}",
+        event.reason
+    );
+}
+
+/// The live path must not double-audit: when the agent is still waiting, its
+/// own handler writes the receipt and the decide endpoint must not add another.
+#[tokio::test]
+async fn a_delivered_decision_is_audited_only_once() {
+    let h = harness(30);
+    let state = Arc::clone(&h.state);
+    let submission = h.submission("some-unknown-tool --flag");
+    let waiter = tokio::spawn(async move {
+        build_router(Arc::clone(&state))
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/approve")
+                    .header("content-type", "application/json")
+                    .body(Body::from(submission.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .expect("response")
+    });
+    let id = await_pending(&h).await;
+    h.call("POST", &format!("/pending/{id}/decide"), json!({ "decision": "allow" }))
+        .await;
+    let _ = waiter.await;
+
+    assert_eq!(h.decisions(), vec![Decision::AllowOnce], "exactly one receipt");
 }

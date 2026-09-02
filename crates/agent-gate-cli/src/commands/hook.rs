@@ -213,7 +213,10 @@ pub async fn run(adapter: Adapter) -> anyhow::Result<i32> {
             let daemon_reason = response.get("reason").and_then(|v| v.as_str()).unwrap_or("");
             let verdict = match decision {
                 "allow_once" | "allow_similar" | "auto_allowed" => Verdict::Allow,
-                "expired" => Verdict::Undecided,
+                // Either the request died, or the agent's wait elapsed while
+                // the request stayed answerable. From the agent's side both
+                // mean the same thing: no answer, use your own prompt.
+                "expired" | "no_decision_yet" => Verdict::Undecided,
                 _ => Verdict::Deny,
             };
             (
