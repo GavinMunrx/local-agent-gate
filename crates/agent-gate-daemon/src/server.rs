@@ -1,11 +1,20 @@
 use crate::audit_store::AuditStore;
 use crate::pending::PendingStore;
+use crate::pairing;
 use agent_gate_policy::{
     classify, ActionInfo, AgentInfo, ApprovalRequest, AuditEvent, Decision, PolicyConfig,
     PolicyDecision, ProjectInfo,
 };
 use axum::extract::Path;
+use axum::http::{header, Request, StatusCode};
+use axum::middleware::{self, Next};
+use axum::response::sse::{Event, Sse};
+use axum::response::{IntoResponse, Response};
 use axum::{extract::State, routing::get, routing::post, Json, Router};
+use std::convert::Infallible;
+use tokio::sync::broadcast;
+use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::{Stream, StreamExt};
 use chrono::{Duration, Utc};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use serde::{Deserialize, Serialize};
@@ -18,6 +27,19 @@ pub struct AppState {
     pub audit: AuditStore,
     pub pending: PendingStore,
     pub request_timeout_seconds: i64,
+    /// Bearer token required on network listeners. The Unix socket is exempt:
+    /// reaching it already implies local access as this user.
+    pub token: String,
+    /// Fires whenever the pending queue changes, so approval surfaces can be
+    /// pushed to rather than poll.
+    pub changes: broadcast::Sender<()>,
+}
+
+impl AppState {
+    pub fn notify_change(&self) {
+        // An error just means nobody is listening yet.
+        let _ = self.changes.send(());
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -71,6 +93,9 @@ async fn decide_pending(
         _ => Decision::DenyOnce,
     };
     let ok = state.pending.decide(&id, decision);
+    if ok {
+        state.notify_change();
+    }
     Json(DecideResponse { ok })
 }
 
@@ -121,6 +146,7 @@ async fn approve(
         ),
         PolicyDecision::Ask => {
             let rx = state.pending.insert(request.clone());
+            state.notify_change();
             let wait = tokio::time::timeout(
                 std::time::Duration::from_secs(state.request_timeout_seconds.max(0) as u64),
                 rx,
@@ -179,13 +205,78 @@ fn describe_match(rule_ids: &[String]) -> String {
     }
 }
 
-pub fn build_router(state: Arc<AppState>) -> Router {
+/// Streams the pending queue to an approval surface. Emits immediately on
+/// connect so a client starts with the current state rather than waiting for
+/// the next change, then on every change after that.
+async fn events(
+    State(state): State<Arc<AppState>>,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let receiver = state.changes.subscribe();
+    let initial = tokio_stream::once(());
+    let changes = BroadcastStream::new(receiver).filter_map(|r| r.ok());
+    let stream = initial.chain(changes).map(move |()| {
+        let payload = serde_json::to_string(&state.pending.list()).unwrap_or_else(|_| "[]".into());
+        Ok(Event::default().event("pending").data(payload))
+    });
+    Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default())
+}
+
+/// Rejects network requests that do not present the pairing token.
+async fn require_token(
+    State(state): State<Arc<AppState>>,
+    request: Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    let presented = request
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .unwrap_or("");
+    if !pairing::matches(&state.token, presented) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "pairing token required" })),
+        )
+            .into_response();
+    }
+    next.run(request).await
+}
+
+fn routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
     Router::new()
         .route("/health", get(health))
         .route("/approve", post(approve))
         .route("/pending", get(list_pending))
         .route("/pending/:id/decide", post(decide_pending))
+        .route("/events", get(events))
         .with_state(state)
+}
+
+/// Router for the Unix socket: no authentication, since filesystem
+/// permissions already gate it.
+pub fn build_router(state: Arc<AppState>) -> Router {
+    routes(Arc::clone(&state)).with_state(state)
+}
+
+/// Router for a network listener: identical, but every request must carry the
+/// pairing token.
+pub fn build_network_router(state: Arc<AppState>) -> Router {
+    routes(Arc::clone(&state))
+        .layer(middleware::from_fn_with_state(
+            Arc::clone(&state),
+            require_token,
+        ))
+        .with_state(state)
+}
+
+/// Serves the network router on a TCP listener, for phones and watches on the
+/// local network or a user-owned tunnel.
+pub async fn serve_tcp(addr: std::net::SocketAddr, app: Router) -> anyhow::Result<()> {
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    println!("Local Agent Gate daemon listening on http://{addr}");
+    axum::serve(listener, app).await?;
+    Ok(())
 }
 
 pub async fn serve_unix(socket_path: &std::path::Path, app: Router) -> anyhow::Result<()> {

@@ -15,7 +15,21 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Run the local approval daemon in the foreground.
-    Daemon,
+    Daemon {
+        /// Also listen on the network so phones and watches can approve.
+        #[arg(long)]
+        lan: bool,
+        #[arg(long, default_value_t = agent_gate_daemon::DEFAULT_LAN_PORT)]
+        port: u16,
+    },
+    /// Show what an approval surface needs to connect over the network.
+    Pair {
+        #[arg(long, default_value_t = agent_gate_daemon::DEFAULT_LAN_PORT)]
+        port: u16,
+        /// Print the token in full rather than a fingerprint.
+        #[arg(long)]
+        show_token: bool,
+    },
     /// Run a command through the approval gate.
     Run {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -107,8 +121,11 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Daemon => {
-            commands::daemon::run().await?;
+        Command::Daemon { lan, port } => {
+            commands::daemon::run(lan, port).await?;
+        }
+        Command::Pair { port, show_token } => {
+            commands::pair::run(port, show_token)?;
         }
         Command::Run { command } => {
             let code = commands::run::run(command).await?;

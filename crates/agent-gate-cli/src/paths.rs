@@ -15,3 +15,7 @@ pub fn socket_path() -> PathBuf {
 pub fn db_path() -> PathBuf {
     app_dir().join("audit.db")
 }
+
+pub fn token_path() -> PathBuf {
+    app_dir().join("pairing-token")
+}

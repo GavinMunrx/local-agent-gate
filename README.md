@@ -119,6 +119,26 @@ Drop an `.agent-gate.yml` in a repo to override the defaults. See
 first: built-in `blocked` risks → deny rules → allow rules → ask rules →
 per-risk-level defaults.
 
+## Approving from another device
+
+Off by default. To let a phone (or eventually a watch) approve:
+
+```sh
+agent-gate daemon --lan          # adds a TCP listener on :8787
+agent-gate pair --show-token     # address + bearer token
+```
+
+Every network request must carry `Authorization: Bearer <token>`; the Unix
+socket stays unauthenticated because filesystem permissions already gate it.
+`GET /events` is an SSE stream that pushes the pending queue on connect and on
+every change, so a client is told rather than polling.
+
+Anyone with the token can approve commands. Prefer a user-owned tunnel
+(Tailscale, WireGuard) over an open LAN.
+
+For why the Apple Watch is harder than it looks, see
+[`docs/apple-watch-path.md`](docs/apple-watch-path.md).
+
 ## Local state
 
 Lives in `~/Library/Application Support/local-agent-gate/`:

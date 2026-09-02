@@ -15,8 +15,9 @@ tower.workspace = true
 rusqlite.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
+tokio-stream.workspace = true
 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }
 http-body-util = "0.1"
-tempfile = "3"
+tempfile.workspace = true

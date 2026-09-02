@@ -4,7 +4,7 @@
 //! interesting behaviour is in the handlers and the pending queue, and driving
 //! futures directly is what lets us simulate a client disconnecting.
 
-use agent_gate_daemon::server::{build_router, AppState};
+use agent_gate_daemon::server::{build_network_router, build_router, AppState};
 use agent_gate_daemon::{reaper, AuditStore, PendingStore};
 use agent_gate_policy::Decision;
 use axum::body::Body;
@@ -15,6 +15,8 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use tower::ServiceExt;
 
+const TOKEN: &str = "test-pairing-token";
+
 struct Harness {
     state: Arc<AppState>,
     dir: tempfile::TempDir,
@@ -23,10 +25,13 @@ struct Harness {
 fn harness(request_timeout_seconds: i64) -> Harness {
     let dir = tempfile::tempdir().expect("tempdir");
     let audit = AuditStore::open(&dir.path().join("audit.db")).expect("audit store");
+    let (changes, _) = tokio::sync::broadcast::channel(16);
     let state = Arc::new(AppState {
         audit,
         pending: PendingStore::new(),
         request_timeout_seconds,
+        token: TOKEN.to_string(),
+        changes,
     });
     Harness { state, dir }
 }
@@ -220,4 +225,84 @@ async fn await_pending(h: &Harness) -> String {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
     panic!("request never appeared in the pending queue");
+}
+
+// ---------------------------------------------------------- network listener
+
+/// The Unix socket is unauthenticated because filesystem permissions gate it.
+/// A TCP listener has no such protection, so every request must carry the
+/// pairing token - this is the boundary that stops anything routable to this
+/// machine from approving its own commands.
+#[tokio::test]
+async fn network_router_rejects_requests_without_a_token() {
+    let h = harness(120);
+    for uri in ["/pending", "/events"] {
+        let response = build_network_router(Arc::clone(&h.state))
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .expect("response");
+        assert_eq!(
+            response.status(),
+            StatusCode::UNAUTHORIZED,
+            "{uri} served without a token"
+        );
+    }
+}
+
+#[tokio::test]
+async fn network_router_rejects_a_wrong_token() {
+    let h = harness(120);
+    let response = build_network_router(Arc::clone(&h.state))
+        .oneshot(
+            Request::builder()
+                .uri("/pending")
+                .header("authorization", "Bearer not-the-token")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn network_router_accepts_the_pairing_token() {
+    let h = harness(120);
+    let response = build_network_router(Arc::clone(&h.state))
+        .oneshot(
+            Request::builder()
+                .uri("/pending")
+                .header("authorization", format!("Bearer {TOKEN}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+/// The local socket must stay usable without a token, or every adapter breaks.
+#[tokio::test]
+async fn unix_router_needs_no_token() {
+    let h = harness(120);
+    let response = build_router(Arc::clone(&h.state))
+        .oneshot(Request::builder().uri("/pending").body(Body::empty()).unwrap())
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+/// An approval surface subscribes before anything is queued, so it has to be
+/// told when the queue changes rather than discovering it by polling.
+#[tokio::test]
+async fn queue_changes_are_broadcast_to_subscribers() {
+    let h = harness(120);
+    let mut events = h.state.changes.subscribe();
+    let submission = h.submission("some-unknown-tool --flag");
+    let handler =
+        build_router(Arc::clone(&h.state)).oneshot(h.request("POST", "/approve", submission));
+    let _ = tokio::time::timeout(std::time::Duration::from_millis(150), handler).await;
+
+    let signalled = tokio::time::timeout(std::time::Duration::from_millis(500), events.recv()).await;
+    assert!(signalled.is_ok(), "parking a request must notify subscribers");
 }

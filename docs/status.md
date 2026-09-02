@@ -116,12 +116,28 @@ Then, per the design doc's milestone order:
 2. **Mac app polish (rest of Milestone 2).** Policy editor UI, local
    notifications for new pending approvals (currently poll-only, no banner),
    app bundle + icon, sign and notarize with a Developer ID, ship a `.dmg`.
-3. **MVP 2 — local mobile web approval.** LAN server, pairing token/QR,
-   responsive approval UI, WebSocket push, Tailscale/manual-URL support. The
-   daemon listens only on the Unix socket today — no TCP interface exists.
+3. **MVP 2 — local mobile web approval.** The daemon side has started: an
+   opt-in TCP listener (`agent-gate daemon --lan`), a pairing token required on
+   every network request, an `/events` SSE stream that pushes the queue on
+   change, and `agent-gate pair`. Still missing: QR pairing, per-device
+   identity beyond the one shared token, signed decisions, and the responsive
+   approval UI itself.
 4. **MVP 3 — native iPhone app.** QR pairing with device keypair exchange,
    native notifications, policy browsing, run receipts.
-5. **MVP 4 — watchOS app.** Depends on MVP 3.
+5. **MVP 4 — watchOS app.** Depends on MVP 3. See
+   [`apple-watch-path.md`](apple-watch-path.md): macOS notifications do not
+   mirror to the Watch, so delivery must go through the iPhone, and no option
+   both avoids a hosted relay and delivers reliably anywhere. That note also
+   argues the request expiry needs splitting into two timeouts before the Watch
+   is worth building.
+
+## Network access
+
+Off by default. `agent-gate daemon --lan` adds a TCP listener; every request on
+it must carry the pairing token (32 random bytes, stored 0600, generated on
+first use). The Unix socket stays unauthenticated because reaching it already
+implies local filesystem access as this user. Anyone holding the token can
+approve commands, so a user-owned tunnel is safer than an open LAN.
 
 ## Operational notes
 
