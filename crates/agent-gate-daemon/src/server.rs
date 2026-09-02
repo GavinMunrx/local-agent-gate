@@ -14,11 +14,10 @@ use std::sync::Arc;
 use tokio::net::UnixListener;
 use tower::Service;
 
-const REQUEST_TIMEOUT_SECONDS: i64 = 300;
-
 pub struct AppState {
     pub audit: AuditStore,
     pub pending: PendingStore,
+    pub request_timeout_seconds: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -93,7 +92,7 @@ async fn approve(
     let request = ApprovalRequest {
         id: agent_gate_policy::new_id("req"),
         created_at: now,
-        expires_at: now + Duration::seconds(REQUEST_TIMEOUT_SECONDS),
+        expires_at: now + Duration::seconds(state.request_timeout_seconds),
         agent: payload.agent.clone(),
         project: ProjectInfo {
             path: payload.project_path.clone(),
@@ -121,10 +120,9 @@ async fn approve(
             format!("Allowed by policy ({})", describe_match(&policy_outcome.matched_rule_ids)),
         ),
         PolicyDecision::Ask => {
-            let request_id = request.id.clone();
             let rx = state.pending.insert(request.clone());
             let wait = tokio::time::timeout(
-                std::time::Duration::from_secs(REQUEST_TIMEOUT_SECONDS as u64),
+                std::time::Duration::from_secs(state.request_timeout_seconds.max(0) as u64),
                 rx,
             )
             .await;
@@ -136,10 +134,11 @@ async fn approve(
                     };
                     (decision, reason)
                 }
-                _ => {
-                    state.pending.remove(&request_id);
-                    (Decision::Expired, "No approval surface responded before expiry".to_string())
-                }
+                // Expiry is the reaper's job alone. Cleaning up here too would
+                // race it into a duplicate audit event, and would not run at all
+                // in the common case: a disconnected client's handler is dropped
+                // mid-await and never reaches this arm.
+                _ => (Decision::Expired, crate::reaper::EXPIRY_REASON.to_string()),
             }
         }
     };
@@ -157,8 +156,10 @@ async fn approve(
         reason: reason.clone(),
         duration_ms: (decided_at - now).num_milliseconds(),
     };
-    if let Err(err) = state.audit.insert(&event) {
-        eprintln!("failed to persist audit event: {err:#}");
+    if decision != Decision::Expired {
+        if let Err(err) = state.audit.insert(&event) {
+            eprintln!("failed to persist audit event: {err:#}");
+        }
     }
 
     Json(SubmitResponse {

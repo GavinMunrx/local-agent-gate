@@ -30,6 +30,19 @@ setup (launchd, local wiring) is deliberately not here.
   the daemon, emits `allow`/`deny`/`defer`, always exits 0. Falls back to
   `defer` when the daemon is unreachable.
 
+**Request lifecycle hardening.** Complete.
+
+- A background reaper sweeps expired requests out of the pending queue and
+  writes an `expired` audit event for each. Expiry is the reaper's job *alone*:
+  the request handler used to do this after its `await`, which never ran in the
+  common case, because a disconnecting client causes hyper to drop the in-flight
+  future along with any cleanup behind it. Symptom before the fix: expired
+  requests accumulated in `/pending` indefinitely and left no audit trail.
+- Request expiry and the reap interval are configurable on `DaemonConfig`.
+- 8 daemon integration tests drive the HTTP API in-process, including a
+  regression test that abandons a handler mid-flight the way a killed adapter
+  does.
+
 **MVP 2 — Mac app.** Partial.
 
 - Menu bar app (SwiftPM executable, no Xcode project). Polls the daemon every
@@ -41,10 +54,6 @@ setup (launchd, local wiring) is deliberately not here.
 
 Rough priority, ahead of new milestones:
 
-- **Daemon integration tests.** Nothing yet spins the daemon up in-process and
-  exercises the HTTP API; all daemon verification has been manual smoke-testing.
-  This is what makes the pending-queue and policy-precedence logic
-  regression-safe, and it gates comfortable work on everything below.
 - **Human-verify the Mac app.** Its socket client, JSON decoding, and decide
   flow were confirmed programmatically, but nobody has clicked the real menu.
 - **Adapter install UX.** `agent-gate adapters install claude-code` does not
@@ -65,6 +74,17 @@ Then, per the design doc's milestone order:
    native notifications, policy browsing, run receipts.
 5. **MVP 4 — watchOS app.** Depends on MVP 3.
 
+## Operational notes
+
+- **Adapter timeouts must exceed the daemon's expiry window.** The daemon
+  defaults to a 120s request expiry; the Claude Code hook is configured at 130s.
+  If the hook's timeout is the shorter of the two, it is killed before the
+  daemon's expiry response arrives and every unanswered request orphans.
+- **Rebuilding the release binary breaks the running LaunchAgent.** launchd
+  caches the code signature, so after `cargo build --release` a
+  `launchctl kickstart -k` fails with `OS_REASON_CODESIGNING`. A full
+  `bootout` + `bootstrap` reload picks up the new binary.
+
 ## Known limitations
 
 - **Tilde expansion.** If a shell expands `~` before `agent-gate` sees argv,
@@ -72,3 +92,17 @@ Then, per the design doc's milestone order:
   command `high` rather than `blocked`. Still denied by default either way
   (fail closed), but the `blocked` label won't always fire. The design doc
   explicitly accepts this class of shell-parsing imperfection for MVP.
+- **No distinction between a command and text quoting one.** The classifier
+  regexes the raw command string, so it fires on a command that merely *contains*
+  a dangerous string — writing a file whose contents mention `rm -rf` gets
+  blocked. This cuts the safe way too (a payload buried in a compound command is
+  still caught), but the false positives are frequent enough during ordinary
+  work to need addressing.
+- **`argv` is not a real shell parse.** Compound commands are split naively, so
+  the field is unreliable for anything with `&&`, `;`, or pipes. Classification
+  does not depend on it, but `commandStartsWith` policy rules effectively assume
+  a single simple command.
+- **A decision on an orphaned request is silently dropped.** If the submitting
+  client has disconnected, `POST /pending/:id/decide` returns `ok: false` and
+  records nothing. The window is small (the reaper clears orphans within one
+  interval) but it is not zero.

@@ -7,7 +7,7 @@
           {
             "type": "command",
             "command": "agent-gate hook claude-code",
-            "timeout": 15
+            "timeout": 130
           }
         ]
       }

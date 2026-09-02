@@ -1,4 +1,5 @@
 use agent_gate_policy::{ApprovalRequest, Decision};
+use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use tokio::sync::oneshot;
@@ -42,6 +43,34 @@ impl PendingStore {
             .expect("pending store lock poisoned")
             .values()
             .map(|e| e.request.clone())
+            .collect()
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.lock().expect("pending store lock poisoned").len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Removes and returns every entry that expired at or before `now`.
+    ///
+    /// The submitting client may be long gone — its request handler is dropped
+    /// the moment it disconnects, taking any cleanup that sits after an `await`
+    /// with it. So expiry cannot be left to the handler; something outside the
+    /// connection lifetime has to sweep. Dropping an entry also drops its
+    /// responder, which wakes any handler still waiting on it.
+    pub fn reap_expired(&self, now: DateTime<Utc>) -> Vec<ApprovalRequest> {
+        let mut entries = self.entries.lock().expect("pending store lock poisoned");
+        let expired: Vec<String> = entries
+            .values()
+            .filter(|e| e.request.expires_at <= now)
+            .map(|e| e.request.id.clone())
+            .collect();
+        expired
+            .iter()
+            .filter_map(|id| entries.remove(id).map(|e| e.request))
             .collect()
     }
 

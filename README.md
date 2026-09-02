@@ -109,3 +109,7 @@ daemon restarts.
 ```sh
 cargo test --workspace
 ```
+
+Unit tests cover the risk classifier and policy precedence; the daemon's
+integration tests drive its HTTP API in-process, including the request
+lifecycle when a client disconnects mid-approval.

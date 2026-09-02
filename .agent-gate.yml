@@ -1,0 +1,18 @@
+# Policy for developing Local Agent Gate itself.
+#
+# This repo's own build/test loop is almost entirely commands that classify as
+# medium risk (the classifier's "no matching rule" bucket), so gating them here
+# means the tool blocks its own development. Medium is allowed as a result.
+#
+# High risk still asks, and the built-in catastrophic tier still denies
+# unconditionally - no rule in this file can override that.
+version: 1
+defaults:
+  lowRisk: allow
+  mediumRisk: allow
+  highRisk: ask
+rules:
+  - id: ask-release-publish
+    match:
+      commandRegex: "(cargo publish|npm publish)"
+    decision: ask

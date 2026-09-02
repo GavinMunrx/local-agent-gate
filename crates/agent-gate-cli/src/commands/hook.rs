@@ -77,8 +77,15 @@ pub async fn claude_code() -> anyhow::Result<i32> {
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown");
                 let daemon_reason = response.get("reason").and_then(|v| v.as_str()).unwrap_or("");
-                let allowed = matches!(decision, "allow_once" | "allow_similar" | "auto_allowed");
-                let permission = if allowed { "allow" } else { "deny" };
+                // An expiry is the absence of a decision, not a refusal: nobody
+                // was watching an approval surface. Treat it like an
+                // unreachable daemon and fall back to Claude Code's own
+                // prompt, rather than hard-denying work the user never saw.
+                let permission = match decision {
+                    "allow_once" | "allow_similar" | "auto_allowed" => "allow",
+                    "expired" => "defer",
+                    _ => "deny",
+                };
                 (permission, format!("Local Agent Gate ({risk} risk): {daemon_reason}"))
             }
             Err(_) => (
