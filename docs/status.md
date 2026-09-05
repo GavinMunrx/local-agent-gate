@@ -189,12 +189,13 @@ Per the design doc's milestone order:
    device.
 4. **MVP 3 — native iPhone app.** QR pairing with device keypair exchange,
    native notifications, policy browsing, run receipts.
-5. **MVP 4 — watchOS app.** Depends on MVP 3. See
-   [`apple-watch-path.md`](apple-watch-path.md): macOS notifications do not
-   mirror to the Watch, so delivery must go through the iPhone, and no option
-   both avoids a hosted relay and delivers reliably anywhere. That note also
-   argues the request expiry needs splitting into two timeouts before the Watch
-   is worth building.
+5. **MVP 4 — watchOS app.** Depends on MVP 3. macOS notifications do not
+   mirror to the Watch, so delivery has to go through the iPhone.
+   [`apple-watch-path.md`](apple-watch-path.md) assessed the options and
+   [`watch-plan.md`](watch-plan.md) is the plan that follows from them: the
+   daemon acts as its own APNs provider, which keeps the no-relay promise, and
+   the Phase 1 daemon work (per-device identity, QR pairing, push sender) is
+   worth having on its own terms.
 
 ## Network access
 

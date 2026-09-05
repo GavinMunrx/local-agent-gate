@@ -1,6 +1,6 @@
 # Getting an approval onto an Apple Watch
 
-Last updated: 2026-09-02
+Last updated: 2026-09-05
 
 The design doc treats the Watch as MVP 4, reached through an iPhone app in
 MVP 3. This note works out what that actually requires, because the delivery
@@ -50,12 +50,18 @@ the user nominates, so it does nothing on cellular.
 A real remote notification: works anywhere, wakes the device, no entitlement
 beyond normal push.
 
-But APNs requires a provider server holding the push key and a registry of
-device tokens. That is a hosted relay, which the product explicitly promises
-not to have ("no hosted relay, no required account, no source upload"). The
-payload could carry no command text - only "an approval is waiting" - which
-keeps repository content off the wire, but the relay still exists and still
-learns when and how often the user's agents ask for dangerous things.
+~~But APNs requires a provider server holding the push key and a registry of
+device tokens. That is a hosted relay~~ *Wrong, and corrected in
+[`watch-plan.md`](watch-plan.md).* The provider can be **the daemon on this
+Mac**: token-based APNs auth is a `.p8` signing key, short-lived JWTs and an
+HTTP/2 client, none of which requires a machine other than the user's own. The
+token registry is a local file. There is no product-operated server and no
+account, so the promise holds as written.
+
+What it does *not* give is end-to-end encryption - Apple sees the payload and
+the timing metadata. That is the reason to push only "an approval is waiting"
+and a request id, never the command text, and to say so plainly rather than
+implying more privacy than exists.
 
 ### 4. Third-party push bridge (ntfy, Pushover, Pushcut)
 
@@ -76,23 +82,18 @@ effort.
 
 ## What this means for the product
 
-The honest summary is that **"no hosted relay" and "reliable Watch
-notifications anywhere" cannot both be true.** Option 2 gets closest: no
-relay, reliable, but Wi-Fi-scoped and gated on an Apple entitlement. Options 3
-and 4 work everywhere and break the promise. Option 1 keeps the promise and
-does not solve the problem.
+~~The honest summary is that "no hosted relay" and "reliable Watch
+notifications anywhere" cannot both be true.~~ *Revised.* Once option 3 is
+read correctly - the Mac is its own APNs provider - the two are compatible.
+Option 3 is now the recommended default, and [`watch-plan.md`](watch-plan.md)
+sequences the work.
 
-The recommended shape is to be explicit rather than split the difference
-silently:
-
-- Default to **option 2**, and start the entitlement request early, since it
-  is the long pole and may be refused.
-- Ship **option 1** first regardless. It is the same app, it validates pairing
-  and the approval UI, and it is genuinely useful at a desk with the phone
-  awake.
-- Treat **option 3 or 4 as an opt-in fallback** the user turns on knowingly,
-  with the tradeoff stated in the UI rather than buried. A notification that
-  says only "1 approval waiting" leaks far less than one carrying the command.
+Option 2 remains the fallback if the APNs route ever proves unworkable: no
+relay and reliable, at the cost of an entitlement Apple grants case by case and
+a Wi-Fi-only scope. Option 4 stays rejected - it is the only one that puts a
+genuine third party in the path. Option 1 is not a delivery mechanism but is
+still worth having, since it is the same app and validates pairing and the
+approval UI.
 
 ## Two design problems the Watch surfaces early
 
