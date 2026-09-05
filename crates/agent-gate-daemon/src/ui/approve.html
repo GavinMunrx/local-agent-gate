@@ -1,0 +1,445 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Agent Gate">
+<title>Local Agent Gate</title>
+<style>
+  :root {
+    --bg: #f4f4f5;
+    --card: #ffffff;
+    --ink: #18181b;
+    --muted: #71717a;
+    --line: #e4e4e7;
+    --code-bg: #f4f4f5;
+    --allow: #15803d;
+    --deny: #b91c1c;
+    --low: #16a34a;
+    --medium: #ca8a04;
+    --high: #dc2626;
+    --blocked: #7f1d1d;
+    --live: #16a34a;
+    --stale: #ca8a04;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #09090b;
+      --card: #18181b;
+      --ink: #fafafa;
+      --muted: #a1a1aa;
+      --line: #27272a;
+      --code-bg: #000000;
+      --allow: #4ade80;
+      --deny: #f87171;
+      --low: #4ade80;
+      --medium: #facc15;
+      --high: #f87171;
+      --blocked: #fca5a5;
+      --live: #4ade80;
+      --stale: #facc15;
+    }
+  }
+
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+  main { max-width: 640px; margin: 0 auto; padding: 12px 12px 48px; }
+
+  header {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 4px 16px;
+  }
+  header h1 { font-size: 17px; font-weight: 600; margin: 0; flex: 1; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+  .dot.live { background: var(--live); }
+  .dot.stale { background: var(--stale); }
+  .conn { font-size: 13px; color: var(--muted); }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 14px;
+    margin-bottom: 12px;
+  }
+
+  .risk {
+    display: inline-block;
+    font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+    padding: 3px 8px; border-radius: 999px; border: 1px solid currentColor;
+  }
+  .risk.low { color: var(--low); }
+  .risk.medium { color: var(--medium); }
+  .risk.high { color: var(--high); }
+  .risk.blocked { color: var(--blocked); }
+
+  .top { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .top .when { margin-left: auto; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  pre.cmd {
+    margin: 0 0 10px;
+    padding: 11px 12px;
+    background: var(--code-bg);
+    border-radius: 10px;
+    font: 14px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+  }
+
+  dl.meta { margin: 0 0 12px; font-size: 13px; color: var(--muted); }
+  dl.meta div { display: flex; gap: 8px; padding: 1px 0; }
+  dl.meta dt { flex: none; width: 74px; }
+  dl.meta dd { margin: 0; color: var(--ink); word-break: break-word; overflow-wrap: anywhere; }
+  dl.meta dd.path { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+
+  ul.reasons { margin: 0 0 12px; padding-left: 18px; font-size: 13px; color: var(--muted); }
+
+  .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  button {
+    font: inherit; font-size: 15px; font-weight: 600;
+    padding: 13px 10px;
+    border-radius: 11px;
+    border: 1px solid var(--line);
+    background: var(--card);
+    color: var(--ink);
+    cursor: pointer;
+    min-height: 48px;
+  }
+  button:active { opacity: .65; }
+  button.allow { border-color: var(--allow); color: var(--allow); }
+  button.deny { border-color: var(--deny); color: var(--deny); }
+  button.similar { font-size: 13px; font-weight: 500; padding: 10px; min-height: 42px; }
+  button.confirming { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+  button:disabled { opacity: .4; }
+
+  .scope {
+    font-size: 12px; color: var(--muted);
+    margin: 12px 0 6px; padding-top: 10px; border-top: 1px solid var(--line);
+  }
+  .scope code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    word-break: break-word;
+  }
+
+  .empty { text-align: center; color: var(--muted); padding: 56px 16px; }
+  .empty p { margin: 6px 0; }
+  .empty .big { font-size: 32px; }
+
+  form.pair { padding: 32px 4px; }
+  form.pair p { color: var(--muted); font-size: 14px; }
+  form.pair input {
+    width: 100%; font: 15px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+    padding: 13px; margin: 10px 0;
+    border: 1px solid var(--line); border-radius: 11px;
+    background: var(--card); color: var(--ink);
+  }
+  form.pair button { width: 100%; }
+  .error { color: var(--deny); font-size: 14px; margin: 10px 0; }
+
+  footer { text-align: center; padding: 20px 0; font-size: 12px; color: var(--muted); }
+  footer button {
+    font-size: 12px; padding: 6px 12px; min-height: 0;
+    color: var(--muted); font-weight: 400;
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <span id="dot" class="dot"></span>
+    <h1>Local Agent Gate</h1>
+    <span id="conn" class="conn">connecting</span>
+  </header>
+  <div id="root"></div>
+  <footer id="footer" hidden>
+    <button id="forget" type="button">Forget this device's token</button>
+  </footer>
+</main>
+
+<script>
+"use strict";
+
+// The pairing token is approval authority. It is kept in localStorage so a
+// phone can be added to the home screen once and stay paired, and it is never
+// left in the URL: a token in browser history outlives the tab it was pasted
+// into.
+const STORAGE_KEY = "agent-gate.token";
+
+function readToken() {
+  const url = new URL(window.location.href);
+  const fromUrl = url.searchParams.get("token");
+  if (fromUrl) {
+    store(fromUrl);
+    url.searchParams.delete("token");
+    window.history.replaceState({}, "", url.pathname + url.search + url.hash);
+    return fromUrl;
+  }
+  try { return window.localStorage.getItem(STORAGE_KEY) || ""; } catch (e) { return ""; }
+}
+function store(token) {
+  try { window.localStorage.setItem(STORAGE_KEY, token); } catch (e) { /* private mode */ }
+}
+function clearToken() {
+  try { window.localStorage.removeItem(STORAGE_KEY); } catch (e) { /* private mode */ }
+}
+
+let token = readToken();
+let pending = [];
+let stream = null;
+let pairError = "";
+// Ids decided on this device but not yet gone from the server's queue. Without
+// this a tap looks ignored until the next push arrives, which on a phone is
+// long enough to tap again.
+const settled = new Set();
+// Which "similar" button is armed, as `${id}:${decision}`. These are the only
+// answers that change what runs later without asking, so they take two taps.
+let armed = null;
+
+const root = document.getElementById("root");
+const dot = document.getElementById("dot");
+const conn = document.getElementById("conn");
+const footer = document.getElementById("footer");
+
+document.getElementById("forget").addEventListener("click", () => {
+  clearToken();
+  token = "";
+  if (stream) { stream.close(); stream = null; }
+  pending = [];
+  render();
+});
+
+function setConnection(state, label) {
+  dot.className = "dot" + (state ? " " + state : "");
+  conn.textContent = label;
+}
+
+function connect() {
+  if (!token) return;
+  if (stream) stream.close();
+  setConnection("", "connecting");
+  // EventSource cannot set headers, so the token goes in the query here. The
+  // daemon accepts either.
+  stream = new EventSource("/events?token=" + encodeURIComponent(token));
+  stream.addEventListener("pending", (event) => {
+    setConnection("live", "live");
+    try { pending = JSON.parse(event.data) || []; } catch (e) { pending = []; }
+    const live = new Set(pending.map((r) => r.id));
+    for (const id of Array.from(settled)) if (!live.has(id)) settled.delete(id);
+    render();
+  });
+  stream.onerror = () => {
+    // EventSource reconnects on its own; say so rather than looking dead.
+    setConnection("stale", "reconnecting");
+  };
+  // A wrong token fails the same way a dropped connection does, so confirm the
+  // token separately and show the real reason.
+  fetch("/pending", { headers: { Authorization: "Bearer " + token } }).then((response) => {
+    if (response.status === 401) {
+      clearToken();
+      token = "";
+      pairError = "That token was rejected. Check `agent-gate pair --show-token`.";
+      if (stream) { stream.close(); stream = null; }
+      render();
+    }
+  }).catch(() => { /* the stream's own error handling covers this */ });
+}
+
+async function decide(id, decision) {
+  settled.add(id);
+  render();
+  try {
+    const response = await fetch("/pending/" + encodeURIComponent(id) + "/decide", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+      body: JSON.stringify({ decision: decision }),
+    });
+    if (!response.ok) throw new Error("http " + response.status);
+  } catch (e) {
+    // Put it back rather than pretend: an approval that silently failed to
+    // send is the one failure this page must never hide.
+    settled.delete(id);
+    setConnection("stale", "send failed");
+    render();
+  }
+}
+
+function remaining(iso) {
+  const seconds = Math.round((new Date(iso).getTime() - Date.now()) / 1000);
+  if (!isFinite(seconds)) return "";
+  if (seconds <= 0) return "expired";
+  const minutes = Math.floor(seconds / 60);
+  return minutes >= 1
+    ? minutes + ":" + String(seconds % 60).padStart(2, "0") + " left"
+    : seconds + "s left";
+}
+
+function el(tag, props, children) {
+  const node = document.createElement(tag);
+  Object.assign(node, props || {});
+  for (const child of children || []) node.appendChild(child);
+  return node;
+}
+function text(tag, className, value) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  node.textContent = value;
+  return node;
+}
+function row(label, value, className) {
+  const dt = text("dt", null, label);
+  const dd = text("dd", className, value);
+  return el("div", null, [dt, dd]);
+}
+
+function card(request) {
+  const busy = settled.has(request.id);
+  const node = el("section", { className: "card" }, []);
+
+  const top = el("div", { className: "top" }, [
+    text("span", "risk " + request.risk.level, request.risk.level),
+    text("span", null, request.agent.name),
+  ]);
+  const when = text("span", "when", remaining(request.expiresAt));
+  when.dataset.expires = request.expiresAt;
+  top.appendChild(when);
+  node.appendChild(top);
+
+  node.appendChild(text("pre", "cmd", request.action.command));
+
+  const meta = el("dl", { className: "meta" }, [
+    row("Project", request.project.name),
+    row("Directory", request.action.workingDirectory, "path"),
+  ]);
+  if (request.project.gitBranch) meta.appendChild(row("Branch", request.project.gitBranch));
+  node.appendChild(meta);
+
+  if (request.risk.reasons && request.risk.reasons.length) {
+    const list = el("ul", { className: "reasons" }, []);
+    for (const reason of request.risk.reasons) list.appendChild(text("li", null, reason));
+    node.appendChild(list);
+  }
+
+  const actions = el("div", { className: "actions" }, []);
+  const allow = text("button", "allow", "Allow");
+  allow.type = "button";
+  allow.disabled = busy;
+  allow.addEventListener("click", () => decide(request.id, "allow_once"));
+  const deny = text("button", "deny", "Deny");
+  deny.type = "button";
+  deny.disabled = busy;
+  deny.addEventListener("click", () => decide(request.id, "deny_once"));
+  actions.appendChild(allow);
+  actions.appendChild(deny);
+  node.appendChild(actions);
+
+  if (request.similarScope) {
+    const scope = el("p", { className: "scope" }, []);
+    scope.appendChild(document.createTextNode("Similar means "));
+    scope.appendChild(text("code", null, request.similarScope));
+    node.appendChild(scope);
+
+    const learn = el("div", { className: "actions" }, []);
+    learn.appendChild(similarButton(request, "allow_similar", "Always allow similar", busy));
+    learn.appendChild(similarButton(request, "block_similar", "Block similar", busy));
+    node.appendChild(learn);
+  }
+  return node;
+}
+
+// Two taps, deliberately. A learned rule answers future commands without
+// asking, and a thumb on a phone is the easiest place to grant one by accident.
+function similarButton(request, decision, label, busy) {
+  const key = request.id + ":" + decision;
+  const isArmed = armed === key;
+  const button = text("button", "similar" + (isArmed ? " confirming" : ""), isArmed ? "Tap again to confirm" : label);
+  button.type = "button";
+  button.disabled = busy;
+  button.addEventListener("click", () => {
+    if (isArmed) {
+      armed = null;
+      decide(request.id, decision);
+    } else {
+      armed = key;
+      render();
+    }
+  });
+  return button;
+}
+
+function pairingForm() {
+  const form = el("form", { className: "pair" }, []);
+  form.appendChild(text("h2", null, "Pair this device"));
+  form.appendChild(text("p", null,
+    "Run `agent-gate pair --show-token` on the Mac and paste the token below. " +
+    "Anyone holding it can approve commands."));
+  if (pairError) form.appendChild(text("p", "error", pairError));
+  const input = el("input", {
+    type: "password",
+    name: "token",
+    placeholder: "pairing token",
+    autocapitalize: "off",
+    autocorrect: "off",
+    spellcheck: false,
+  }, []);
+  form.appendChild(input);
+  const submit = text("button", null, "Pair");
+  submit.type = "submit";
+  form.appendChild(submit);
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const value = input.value.trim();
+    if (!value) return;
+    token = value;
+    store(value);
+    pairError = "";
+    render();
+    connect();
+  });
+  return form;
+}
+
+function render() {
+  root.textContent = "";
+  footer.hidden = !token;
+
+  if (!token) {
+    setConnection("", "not paired");
+    root.appendChild(pairingForm());
+    return;
+  }
+
+  const visible = pending.filter((request) => !settled.has(request.id));
+  if (!visible.length) {
+    const empty = el("div", { className: "empty" }, []);
+    empty.appendChild(text("p", "big", "\u{1F6E1}"));
+    empty.appendChild(text("p", null, "No pending approvals"));
+    empty.appendChild(text("p", null, "This page updates the moment an agent asks."));
+    root.appendChild(empty);
+    return;
+  }
+  for (const request of visible) root.appendChild(card(request));
+}
+
+// The countdown is the only thing that changes without a server push, so it
+// is patched in place. A full re-render every second would rebuild the buttons
+// under a thumb that is halfway through tapping one.
+setInterval(() => {
+  for (const node of document.querySelectorAll(".when[data-expires]")) {
+    node.textContent = remaining(node.dataset.expires);
+  }
+}, 1000);
+
+render();
+connect();
+</script>
+</body>
+</html>

@@ -540,3 +540,77 @@ async fn a_rule_written_by_the_cli_applies_immediately() {
     let after = h.call("POST", "/approve", h.submission("npm install rimraf")).await;
     assert_eq!(after["decision"], json!("auto_allowed"));
 }
+
+// ------------------------------------------------------------- approval UI
+
+/// The page carries no approval data and has to be reachable before a device
+/// holds a token, or there is nowhere to type one in.
+#[tokio::test]
+async fn the_ui_is_served_without_a_token() {
+    let h = harness(120);
+    let response = build_network_router(Arc::clone(&h.state))
+        .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert!(content_type.starts_with("text/html"), "served as {content_type}");
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let html = String::from_utf8_lossy(&body);
+    assert!(html.contains("Local Agent Gate"), "not the approval page");
+    // Everything must be inline: an approval surface that needs the internet
+    // to render is useless on the LAN it was built for.
+    assert!(!html.contains("src=\"http"), "the page pulls a remote asset");
+    assert!(!html.contains("href=\"http"), "the page pulls a remote asset");
+}
+
+/// Serving the page without a token must not have opened up the data behind it.
+#[tokio::test]
+async fn serving_the_ui_does_not_expose_the_queue() {
+    let h = harness(120);
+    let router = build_network_router(Arc::clone(&h.state));
+    let response = router
+        .oneshot(Request::builder().uri("/pending").body(Body::empty()).unwrap())
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// `EventSource` cannot set a header, so the stream the page lives on has to
+/// authenticate some other way.
+#[tokio::test]
+async fn a_token_in_the_query_is_accepted() {
+    let h = harness(120);
+    let response = build_network_router(Arc::clone(&h.state))
+        .oneshot(
+            Request::builder()
+                .uri(&format!("/pending?token={TOKEN}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_wrong_token_in_the_query_is_rejected() {
+    let h = harness(120);
+    for uri in ["/pending?token=not-the-token", "/pending?token=", "/pending?other=x"] {
+        let response = build_network_router(Arc::clone(&h.state))
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .expect("response");
+        assert_eq!(
+            response.status(),
+            StatusCode::UNAUTHORIZED,
+            "{uri} was accepted"
+        );
+    }
+}

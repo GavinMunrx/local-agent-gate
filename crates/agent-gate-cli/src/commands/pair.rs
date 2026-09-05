@@ -22,7 +22,18 @@ pub fn run(port: u16, show_token: bool) -> Result<()> {
     if show_token {
         println!("  token: {token}");
         println!();
-        println!("  Send it as: Authorization: Bearer <token>");
+        // A phone cannot set a header when it opens a link, so the pairing URL
+        // carries the token in the query. The page stores it and strips it from
+        // the address bar, but the link itself is as sensitive as the token.
+        println!("  Open on the phone:");
+        for address in &addresses {
+            println!("    http://{address}:{port}/?token={token}");
+        }
+        if !addresses.is_empty() {
+            println!();
+        }
+        println!("  Or open http://<address>:{port} and paste the token there.");
+        println!("  Other clients send it as: Authorization: Bearer <token>");
     } else {
         println!(
             "  token: {} (re-run with --show-token to reveal)",

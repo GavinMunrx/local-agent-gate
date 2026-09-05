@@ -151,19 +151,35 @@ Revocation takes effect on the next command, not the next daemon restart: the
 daemon re-reads the rule file on every request, precisely because a rule that
 silently allows commands has to be revocable now.
 
-## Approving from another device
+## Approving from a phone
 
 Off by default. To let a phone (or eventually a watch) approve:
 
 ```sh
 agent-gate daemon --lan          # adds a TCP listener on :8787
-agent-gate pair --show-token     # address + bearer token
+agent-gate pair --show-token     # prints a URL to open on the phone
 ```
+
+Opening that URL gives you the approval page: the pending queue, live, with
+Allow, Deny, Always Allow Similar and Block Similar on each request, and the
+scope a "similar" answer would grant printed above it. The two learning
+answers take two taps, because a thumb on a phone is the easiest place to
+grant a standing rule by accident.
+
+The page is one file with no external assets, so it renders on a LAN with no
+internet, and it holds no state beyond the token: every decision goes to the
+daemon, which remains the only authority.
 
 Every network request must carry `Authorization: Bearer <token>`; the Unix
 socket stays unauthenticated because filesystem permissions already gate it.
+A browser cannot set a header when it navigates and `EventSource` cannot set
+one at all, so the token is also accepted as a `?token=` query parameter -
+which is what the pairing URL uses. The page stores it and strips it from the
+address bar immediately, but treat the URL itself as being as sensitive as the
+token. `GET /` is the only route served without one, and it carries no data.
+
 `GET /events` is an SSE stream that pushes the pending queue on connect and on
-every change, so a client is told rather than polling.
+every change, so the page is told rather than polling.
 
 Anyone with the token can approve commands. Prefer a user-owned tunnel
 (Tailscale, WireGuard) over an open LAN.

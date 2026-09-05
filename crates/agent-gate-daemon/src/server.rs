@@ -324,19 +324,46 @@ async fn events(
     Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default())
 }
 
+/// The approval UI, served to a phone browser over the network listener.
+///
+/// Deliberately one self-contained file with no external assets: an approval
+/// surface that needs the internet to render is useless on the LAN it was
+/// built for. Served without the pairing token because it carries no data -
+/// the page asks for the token itself, which is also what lets a phone
+/// bookmark the bare address.
+async fn ui() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        include_str!("ui/approve.html"),
+    )
+}
+
 /// Rejects network requests that do not present the pairing token.
+///
+/// A browser cannot set a header when it navigates, and `EventSource` cannot
+/// set one at all, so the token is also accepted as a `token` query parameter.
+/// That puts it in browser history and any proxy log on the path, which is why
+/// the page strips it from the URL as soon as it has stored it, and why the
+/// header remains the way every non-browser client presents it.
 async fn require_token(
     State(state): State<Arc<AppState>>,
     request: Request<axum::body::Body>,
     next: Next,
 ) -> Response {
-    let presented = request
+    let from_header = request
         .headers()
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
-        .unwrap_or("");
-    if !pairing::matches(&state.token, presented) {
+        .map(|v| v.to_string());
+    let from_query = request.uri().query().and_then(|q| {
+        q.split('&')
+            .filter_map(|pair| pair.split_once('='))
+            .find(|(k, _)| *k == "token")
+            .map(|(_, v)| percent_decode(v))
+    });
+    let presented = from_header.or(from_query).unwrap_or_default();
+    if !pairing::matches(&state.token, &presented) {
         return (
             StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({ "error": "pairing token required" })),
@@ -346,7 +373,27 @@ async fn require_token(
     next.run(request).await
 }
 
-fn routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
+/// Hex-decodes the `%NN` escapes a browser may apply to a query value. The
+/// token is hex, so nothing else needs decoding.
+fn percent_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out = String::with_capacity(value.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(byte) = u8::from_str_radix(&value[i + 1..i + 3], 16) {
+                out.push(byte as char);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
+}
+
+fn api_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
     Router::new()
         .route("/health", get(health))
         .route("/approve", post(approve))
@@ -359,17 +406,24 @@ fn routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
 /// Router for the Unix socket: no authentication, since filesystem
 /// permissions already gate it.
 pub fn build_router(state: Arc<AppState>) -> Router {
-    routes(Arc::clone(&state)).with_state(state)
+    api_routes(Arc::clone(&state))
+        .route("/", get(ui))
+        .with_state(state)
 }
 
 /// Router for a network listener: identical, but every request must carry the
 /// pairing token.
+///
+/// The UI shell is merged *after* the token layer, so it stays reachable
+/// without one. It contains no approval data; everything it displays comes
+/// from the API routes above, which the layer still guards.
 pub fn build_network_router(state: Arc<AppState>) -> Router {
-    routes(Arc::clone(&state))
+    api_routes(Arc::clone(&state))
         .layer(middleware::from_fn_with_state(
             Arc::clone(&state),
             require_token,
         ))
+        .merge(Router::new().route("/", get(ui)))
         .with_state(state)
 }
 

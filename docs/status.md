@@ -127,6 +127,35 @@ surface.
   sent the following one back to the queue with the daemon still running, and
   `rm -rf /` stayed blocked throughout.
 
+**MVP 2 / Milestone 4 — approval from a phone.** The exit criterion is met.
+
+- `GET /` serves a responsive approval page from the network listener: the
+  pending queue live over SSE, each request with its risk tier, reasons,
+  project, directory and a countdown, and all four actions from the design
+  doc's approval card.
+- One self-contained file, no external assets. An approval surface that needs
+  the internet to render is useless on the LAN it was built for; a test asserts
+  the page pulls nothing remote.
+- **The token had to reach a browser somehow.** A browser cannot set a header
+  when it navigates, and `EventSource` cannot set one at all, so the daemon
+  also accepts `?token=`, and `agent-gate pair --show-token` prints a URL that
+  carries it. The page stores it in `localStorage` and strips it from the
+  address bar at once, because a token left in browser history outlives the tab
+  it was pasted into. `GET /` is the only route exempt from the token, and it
+  carries no data - it exists so a device with no token has somewhere to type
+  one in.
+- The two "similar" answers take two taps. They are the only controls that
+  change what runs later without asking, and a phone is where a stray thumb
+  lands.
+- A decision that fails to send restores the card rather than clearing it. An
+  approval that silently failed to send is the one failure this page must not
+  hide.
+- **Verified live in a browser 2026-09-04.** Two agents queued simultaneously;
+  "always allow similar" (two taps) on the Claude Code request and "Deny" on
+  the Codex one. Each hook received the right verdict, the rule was learned,
+  the audit log recorded both, the queue emptied over SSE without a reload, and
+  the console was clean.
+
 **MVP 2 — Mac app.** Partial, but the core loop is verified.
 
 - Menu bar app (SwiftPM executable, no Xcode project). Polls the daemon every
@@ -153,12 +182,11 @@ Per the design doc's milestone order:
 2. **Mac app polish (rest of Milestone 2).** Policy editor UI, local
    notifications for new pending approvals (currently poll-only, no banner),
    app bundle + icon, sign and notarize with a Developer ID, ship a `.dmg`.
-3. **MVP 2 — local mobile web approval.** The daemon side has started: an
-   opt-in TCP listener (`agent-gate daemon --lan`), a pairing token required on
-   every network request, an `/events` SSE stream that pushes the queue on
-   change, and `agent-gate pair`. Still missing: QR pairing, per-device
-   identity beyond the one shared token, signed decisions, and the responsive
-   approval UI itself.
+3. **Milestone 4's remainder.** The approval UI, the listener, the token and
+   the SSE stream are done (see above). Still missing: QR pairing, per-device
+   identity beyond the one shared token, and signed decisions - all three are
+   the same piece of work, replacing one shared secret with a keypair per
+   device.
 4. **MVP 3 — native iPhone app.** QR pairing with device keypair exchange,
    native notifications, policy browsing, run receipts.
 5. **MVP 4 — watchOS app.** Depends on MVP 3. See
