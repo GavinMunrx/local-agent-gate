@@ -1,5 +1,8 @@
 # Local Agent Gate
 
+[![CI](https://github.com/GavinMunrx/local-agent-gate/actions/workflows/ci.yml/badge.svg)](https://github.com/GavinMunrx/local-agent-gate/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 A local command firewall for AI coding agents.
 
 AI agents increasingly want to run shell commands — install dependencies, run
@@ -37,7 +40,7 @@ approval from a phone browser over your LAN or a tunnel.
 
 **Not yet.** No signed, notarized release or `.dmg` — you build from source. No
 native iPhone or Watch app. The menu bar app has no notifications and no policy
-editor. There is no CI.
+editor.
 
 [`docs/status.md`](docs/status.md) tracks what is built against the milestones
 in [`docs/local-agent-gate-design.md`](docs/local-agent-gate-design.md), and is
@@ -306,8 +309,13 @@ connection-refused until the daemon restarts.
 
 ```sh
 cargo test --workspace                              # unit + integration tests
+cargo clippy --workspace --all-targets -- -D warnings
 cd apps/mac/LocalAgentGateMac && swift build        # menu bar app
 ```
+
+CI runs all three on macOS for every push and pull request. The tree is not
+rustfmt-formatted, so `cargo fmt` is deliberately not part of it — match the
+surrounding style rather than reformatting a file you touch.
 
 Unit tests cover the shell parser, the risk classifier, policy precedence and
 learned-rule scoping. The daemon's integration tests drive its HTTP API

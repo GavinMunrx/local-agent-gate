@@ -590,7 +590,7 @@ async fn a_token_in_the_query_is_accepted() {
     let response = build_network_router(Arc::clone(&h.state))
         .oneshot(
             Request::builder()
-                .uri(&format!("/pending?token={TOKEN}"))
+                .uri(format!("/pending?token={TOKEN}"))
                 .body(Body::empty())
                 .unwrap(),
         )

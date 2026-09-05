@@ -3,6 +3,7 @@ name = "agent-gate-policy"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Risk classification and policy evaluation for Local Agent Gate."
 
 [dependencies]

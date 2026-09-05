@@ -3,6 +3,7 @@ name = "agent-gate-daemon"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Approval daemon, pending queue and audit log for Local Agent Gate."
 
 [dependencies]

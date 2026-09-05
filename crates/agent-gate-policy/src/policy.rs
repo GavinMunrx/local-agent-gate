@@ -123,7 +123,7 @@ impl PolicyConfig {
     pub fn with_learned(&self, learned: Vec<PolicyRule>) -> PolicyConfig {
         let mut merged = self.clone();
         let mut rules = learned;
-        rules.extend(merged.rules.into_iter());
+        rules.extend(merged.rules);
         merged.rules = rules;
         merged
     }

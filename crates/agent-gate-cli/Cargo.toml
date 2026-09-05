@@ -3,6 +3,7 @@ name = "agent-gate-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "The agent-gate command line tool: daemon, command wrapper and agent adapters."
 
 [[bin]]

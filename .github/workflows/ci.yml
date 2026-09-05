@@ -1,0 +1,46 @@
+name: CI
+
+# macOS only: the state directory, install paths and menu bar app are all
+# macOS-specific, so a Linux runner would test something the project does not
+# ship.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Only first-party actions, so CI adds no third-party trust to a project
+      # whose whole argument is about what runs on your machine.
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
+
+  swift:
+    name: Menu bar app
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: swift build
+        working-directory: apps/mac/LocalAgentGateMac
