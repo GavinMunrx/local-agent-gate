@@ -17,6 +17,9 @@ pub fn reap_once(state: &AppState) -> usize {
 pub fn reap_at(state: &AppState, now: DateTime<Utc>) -> usize {
     let expired = state.pending.reap_expired(now);
     for request in &expired {
+        // A request that has died must not leave a live button behind on a
+        // lock screen, waiting to answer something that no longer exists.
+        state.grants.revoke_for(&request.id);
         let event = AuditEvent {
             id: agent_gate_policy::new_id("evt"),
             request_id: request.id.clone(),

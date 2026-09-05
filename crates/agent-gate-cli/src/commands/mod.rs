@@ -3,6 +3,7 @@ pub mod approve;
 pub mod audit;
 pub mod daemon;
 pub mod hook;
+pub mod notify;
 pub mod pair;
 pub mod policy;
 pub mod run;

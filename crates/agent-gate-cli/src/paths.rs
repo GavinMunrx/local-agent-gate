@@ -23,3 +23,7 @@ pub fn token_path() -> PathBuf {
 pub fn learned_policy_path() -> PathBuf {
     app_dir().join("learned-policy.yml")
 }
+
+pub fn notify_config_path() -> PathBuf {
+    app_dir().join("notify.yml")
+}

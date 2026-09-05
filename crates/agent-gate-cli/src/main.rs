@@ -47,6 +47,11 @@ enum Command {
         #[command(subcommand)]
         action: PolicyAction,
     },
+    /// Push an approval to your phone (and through it, your watch).
+    Notify {
+        #[command(subcommand)]
+        action: NotifyAction,
+    },
     /// Install, remove, or inspect the agent hook wiring.
     Adapters {
         #[command(subcommand)]
@@ -67,6 +72,20 @@ enum PolicyAction {
     Forget { id: String },
     /// Remove every learned rule.
     ForgetAll,
+}
+
+#[derive(Subcommand)]
+enum NotifyAction {
+    /// Write a starting config with a generated topic.
+    Setup {
+        /// Use your own ntfy server instead of the public one.
+        #[arg(long)]
+        server: Option<String>,
+    },
+    /// Show whether notifications are on, and how they are configured.
+    Status,
+    /// Send a test notification.
+    Test,
 }
 
 #[derive(Subcommand)]
@@ -156,6 +175,11 @@ async fn main() -> anyhow::Result<()> {
             PolicyAction::List => commands::policy::list()?,
             PolicyAction::Forget { id } => commands::policy::forget(&id)?,
             PolicyAction::ForgetAll => commands::policy::forget_all()?,
+        },
+        Command::Notify { action } => match action {
+            NotifyAction::Setup { server } => commands::notify::setup(server)?,
+            NotifyAction::Status => commands::notify::status()?,
+            NotifyAction::Test => commands::notify::test().await?,
         },
         Command::Adapters { action } => {
             let project = std::env::current_dir()?;

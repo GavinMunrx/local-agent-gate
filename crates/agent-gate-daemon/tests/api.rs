@@ -39,6 +39,8 @@ fn harness_with(agent_wait_seconds: i64, request_ttl_seconds: i64) -> Harness {
         learned_path: dir.path().join("learned.yml"),
         learned_lock: std::sync::Mutex::new(()),
         changes,
+        notify: None,
+        grants: agent_gate_daemon::notify::GrantStore::default(),
     });
     Harness { state, dir }
 }
@@ -613,4 +615,152 @@ async fn a_wrong_token_in_the_query_is_rejected() {
             "{uri} was accepted"
         );
     }
+}
+
+// -------------------------------------------------------- notification buttons
+
+use agent_gate_daemon::notify::GrantStore;
+
+/// A button from a notification carries its own single-use authority, so it
+/// has to work without the pairing token - that is the whole point of it
+/// surviving a trip through a relay.
+#[tokio::test]
+async fn a_notification_button_decides_without_the_pairing_token() {
+    let h = harness_with(0, 600);
+    h.call("POST", "/approve", h.submission("npm install left-pad")).await;
+    let id = h.state.pending.list()[0].id.clone();
+    let token = h.state.grants.mint(&id, Decision::AllowOnce);
+
+    let response = build_network_router(Arc::clone(&h.state))
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/act/{token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(h.state.pending.is_empty(), "the request was not decided");
+    assert_eq!(h.decisions(), vec![Decision::AllowOnce]);
+}
+
+/// A capability that leaks through a relay must not be replayable.
+#[tokio::test]
+async fn a_notification_button_cannot_be_used_twice() {
+    let h = harness_with(0, 600);
+    h.call("POST", "/approve", h.submission("npm install left-pad")).await;
+    let id = h.state.pending.list()[0].id.clone();
+    let token = h.state.grants.mint(&id, Decision::AllowOnce);
+
+    for (attempt, expected) in [(1, StatusCode::OK), (2, StatusCode::NOT_FOUND)] {
+        let response = build_network_router(Arc::clone(&h.state))
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/act/{token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), expected, "attempt {attempt}");
+    }
+}
+
+/// An invented token must not be able to answer anything.
+#[tokio::test]
+async fn an_unknown_button_token_is_rejected() {
+    let h = harness_with(0, 600);
+    h.call("POST", "/approve", h.submission("npm install left-pad")).await;
+    let response = build_network_router(Arc::clone(&h.state))
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/act/act_not_a_real_token")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert!(!h.state.pending.is_empty(), "an unknown token decided a request");
+}
+
+/// Answering by any route must retire every button for that request, or a
+/// stale Deny sits on a lock screen able to fire at something already allowed.
+#[tokio::test]
+async fn deciding_normally_retires_the_notification_buttons() {
+    let h = harness_with(0, 600);
+    h.call("POST", "/approve", h.submission("npm install left-pad")).await;
+    let id = h.state.pending.list()[0].id.clone();
+    let allow = h.state.grants.mint(&id, Decision::AllowOnce);
+    let deny = h.state.grants.mint(&id, Decision::DenyOnce);
+
+    h.call("POST", &format!("/pending/{id}/decide"), json!({ "decision": "deny_once" })).await;
+
+    assert!(h.state.grants.redeem(&allow).is_none());
+    assert!(h.state.grants.redeem(&deny).is_none());
+    assert!(h.state.grants.is_empty());
+}
+
+/// The same applies when the request dies of old age.
+#[tokio::test]
+async fn reaping_a_request_retires_its_buttons() {
+    let h = harness_with(0, 600);
+    h.call("POST", "/approve", h.submission("npm install left-pad")).await;
+    let id = h.state.pending.list()[0].id.clone();
+    let token = h.state.grants.mint(&id, Decision::AllowOnce);
+
+    reaper::reap_at(&h.state, Utc::now() + Duration::seconds(601));
+
+    assert!(h.state.grants.redeem(&token).is_none(), "a reaped request left a live button");
+}
+
+/// A button pressed after the request is gone reports that honestly rather
+/// than silently doing nothing.
+#[tokio::test]
+async fn a_button_for_a_dead_request_says_so() {
+    let h = harness_with(0, 600);
+    h.call("POST", "/approve", h.submission("npm install left-pad")).await;
+    let id = h.state.pending.list()[0].id.clone();
+    let token = h.state.grants.mint(&id, Decision::AllowOnce);
+    // Expire the request without going through revoke_for, the way a restart
+    // or an out-of-band removal would.
+    h.state.pending.reap_expired(Utc::now() + Duration::seconds(601));
+
+    let response = build_network_router(Arc::clone(&h.state))
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/act/{token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::GONE);
+}
+
+/// The grant store must not be a slow memory leak on a long-running daemon.
+#[tokio::test]
+async fn grants_do_not_accumulate_across_many_requests() {
+    let h = harness_with(0, 600);
+    for i in 0..20 {
+        h.call("POST", "/approve", h.submission(&format!("npm install pkg{i}"))).await;
+    }
+    for request in h.state.pending.list() {
+        h.state.grants.mint(&request.id, Decision::AllowOnce);
+        h.state.grants.mint(&request.id, Decision::DenyOnce);
+    }
+    assert_eq!(h.state.grants.len(), 40);
+    reaper::reap_at(&h.state, Utc::now() + Duration::seconds(601));
+    assert!(h.state.grants.is_empty(), "grants outlived every request they belonged to");
+}
+
+/// Sanity: a store nobody has minted from is empty.
+#[test]
+fn a_fresh_grant_store_is_empty() {
+    assert!(GrantStore::default().is_empty());
 }

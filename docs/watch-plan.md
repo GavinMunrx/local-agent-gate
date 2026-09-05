@@ -51,7 +51,30 @@ still requires reaching your Mac. On the same network that is the LAN listener
 that already exists. Away from it, that is a user-owned tunnel. A Watch tap
 with no route home must fail visibly, never silently.
 
-## Phase 0 — Prerequisites
+## Phase 0 — The free stand-in, first
+
+Before spending $99 and three weeks, answer the question the rest of this plan
+rests on: **how often does this buzz, and would you mute it?** If the answer is
+"constantly", the native app was going to buy you a muted tool, and the effort
+belongs in learned rules and triage instead.
+
+`agent-gate notify setup` does this today, at no cost and with no Apple
+enrolment: the daemon pushes to an ntfy topic, the free App Store app receives
+it, the Watch mirrors it. It is deliberately shaped like the APNs path below —
+the wake-up crosses a relay, the decision does not — so replacing it later
+changes one module.
+
+Two other projects solve the wrist differently and are worth knowing about:
+`shobhit99/claude-watch` builds a native watchOS app that streams over Wi-Fi
+from a local bridge, which avoids the $99 by never using push and therefore
+never reaches a wrist you have walked away from; `fomyio/clauding-afk` uses
+ntfy exactly as above. Neither has a risk classifier, a policy engine or an
+audit log — the wrist is a surface, and the gate is the product.
+
+Run the free version for a week. Then decide whether the rest of this is worth
+building.
+
+## Phase 0.5 — Prerequisites
 
 These gate everything and involve waiting on Apple, so start them before
 writing code.
@@ -172,7 +195,8 @@ them, so start both at once.
 
 | | Work | Rough effort | Blocked by |
 | --- | --- | --- | --- |
-| Now | Phase 0 enrolment and keys | an hour, plus waiting | — |
+| First | Phase 0 free ntfy bridge, a week of real use | done | — |
+| Now | Phase 0.5 enrolment and keys | an hour, plus waiting | — |
 | Now | 1.1 device registry, 1.2 QR pairing | 2–3 days | nothing |
 | Then | 1.3 APNs sender → `BadDeviceToken` | 1–2 days | `.p8` key |
 | Then | 1.4–1.7 push, escalation, endpoints | 2 days | 1.1, 1.3 |

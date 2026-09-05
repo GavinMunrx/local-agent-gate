@@ -7,6 +7,7 @@ pub async fn run(lan: bool, port: u16) -> anyhow::Result<()> {
         paths::db_path(),
         paths::token_path(),
         paths::learned_policy_path(),
+        paths::notify_config_path(),
     );
     if lan {
         // 0.0.0.0 so phones on the same network can reach it. The pairing

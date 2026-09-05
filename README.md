@@ -249,6 +249,39 @@ Anyone with the token can approve commands. Prefer a user-owned tunnel
 For why the Apple Watch is harder than it looks, see
 [`docs/apple-watch-path.md`](docs/apple-watch-path.md).
 
+## Getting buzzed when you walk away
+
+The approval page only tells you something is waiting while it is open. To be
+told when it is not, the daemon can push to an [ntfy](https://ntfy.sh) topic —
+a free app already on the App Store — which your Watch then mirrors. No Apple
+Developer account, no app to build.
+
+```sh
+agent-gate notify setup     # generates a topic, writes the config
+agent-gate notify test      # prove the wiring before an agent depends on it
+```
+
+Off unless that config exists, in the same spirit as `--lan`.
+
+**Only the wake-up crosses the relay.** It carries the risk tier, the agent,
+and the project name — never the command text, unless you set
+`include_command: true`. The decision and the approval page go straight to your
+Mac at `callback_base`, so what you actually approve never touches a third
+party. Point `server:` at your own ntfy instance to keep even the wake-up
+local.
+
+By default the notification carries one button, which opens the approval page —
+a paired device already holds its own token, so nothing secret goes on the
+wire. Setting `actions: decide` adds one-tap Allow and Deny. Those buttons each
+carry a **single-use capability scoped to that one request**: it works once,
+dies when the request is answered or expires, and cannot touch anything else.
+That is a deliberate, bounded tradeoff rather than putting your pairing token
+in a push message.
+
+This is a stand-in for a real push provider, not a destination — see
+[`docs/watch-plan.md`](docs/watch-plan.md) for the APNs path, which gives the
+same reach with no third party at all.
+
 ## What this protects against — and what it does not
 
 Local Agent Gate is a guardrail against an agent doing something destructive
@@ -281,6 +314,11 @@ against an attacker who already runs code on your machine.
   the failure mode stays fail-safe.
 - **Multi-user trust.** The pairing token is a single shared secret. Anyone
   holding it can approve anything. There is no per-device identity yet.
+- **A push relay you do not run.** With notifications enabled against a public
+  ntfy server, that operator learns when your agents ask for dangerous things,
+  and — if you opt into `actions: decide` — briefly holds a capability that
+  could answer one pending request. Self-host, or stay on the default `view`
+  actions.
 
 Known limitations are tracked in detail at the end of
 [`docs/status.md`](docs/status.md).
@@ -292,6 +330,7 @@ Lives in `~/Library/Application Support/local-agent-gate/`:
 - `agent-gate.sock` — the daemon's Unix socket
 - `audit.db` — SQLite audit log
 - `learned-policy.yml` — rules from "allow similar" / "block similar"
+- `notify.yml` — push notification config; absent means notifications are off
 - `pairing-token` — the network bearer token (0600, created on first use)
 
 Nothing leaves the machine. Don't delete that directory while the daemon is

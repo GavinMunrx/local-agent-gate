@@ -1,4 +1,5 @@
 pub mod audit_store;
+pub mod notify;
 pub mod pairing;
 pub mod pending;
 pub mod reaper;
@@ -34,6 +35,7 @@ pub struct DaemonConfig {
     pub db_path: PathBuf,
     pub token_path: PathBuf,
     pub learned_path: PathBuf,
+    pub notify_path: PathBuf,
     pub agent_wait_seconds: i64,
     pub request_ttl_seconds: i64,
     pub reap_interval_seconds: u64,
@@ -48,12 +50,14 @@ impl DaemonConfig {
         db_path: PathBuf,
         token_path: PathBuf,
         learned_path: PathBuf,
+        notify_path: PathBuf,
     ) -> Self {
         DaemonConfig {
             socket_path,
             db_path,
             token_path,
             learned_path,
+            notify_path,
             agent_wait_seconds: DEFAULT_AGENT_WAIT_SECONDS,
             request_ttl_seconds: DEFAULT_REQUEST_TTL_SECONDS,
             reap_interval_seconds: DEFAULT_REAP_INTERVAL_SECONDS,
@@ -66,6 +70,11 @@ pub async fn run(config: DaemonConfig) -> anyhow::Result<()> {
     let audit = AuditStore::open(&config.db_path)?;
     let pending = PendingStore::new();
     let token = pairing::load_or_create(&config.token_path)?;
+    let notify = notify::NotifyConfig::load(&config.notify_path)?;
+    match &notify {
+        Some(c) => println!("Notifications on: {} (actions: {:?})", c.topic_url(), c.actions),
+        None => println!("Notifications off (no {})", config.notify_path.display()),
+    }
     let (changes, _) = tokio::sync::broadcast::channel(64);
     let state = Arc::new(server::AppState {
         audit,
@@ -76,6 +85,8 @@ pub async fn run(config: DaemonConfig) -> anyhow::Result<()> {
         learned_path: config.learned_path.clone(),
         learned_lock: std::sync::Mutex::new(()),
         changes,
+        notify,
+        grants: notify::GrantStore::default(),
     });
 
     reaper::spawn(

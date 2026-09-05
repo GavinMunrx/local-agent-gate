@@ -44,6 +44,10 @@ pub struct AppState {
     /// Fires whenever the pending queue changes, so approval surfaces can be
     /// pushed to rather than poll.
     pub changes: broadcast::Sender<()>,
+    /// Push notifications, when configured. `None` means off.
+    pub notify: Option<crate::notify::NotifyConfig>,
+    /// Single-use capabilities handed out with notification buttons.
+    pub grants: crate::notify::GrantStore,
 }
 
 /// Reads the learned rules from disk.
@@ -129,6 +133,9 @@ async fn decide_pending(
     let ok = outcome.is_some();
     if let Some(decided) = outcome {
         state.notify_change();
+        // A request answered here must not leave a live button behind on
+        // someone's lock screen.
+        state.grants.revoke_for(&id);
         // "Similar" decisions teach the gate. The rule is scoped to the project
         // the command came from, and can never override the catastrophic tier.
         if let Some(learned_decision) = match decision {
@@ -154,36 +161,75 @@ async fn decide_pending(
         // event. If it has already fallen back, nobody else will - and a human
         // decision must never go unrecorded just because it arrived late.
         if !decided.delivered {
-            let now = Utc::now();
-            let request = decided.request;
-            let event = AuditEvent {
-                id: agent_gate_policy::new_id("evt"),
-                request_id: request.id.clone(),
-                timestamp: now,
-                agent_id: request.agent.id.clone(),
-                project_path: request.project.path.clone(),
-                command: request.action.command.clone(),
-                risk_level: request.risk.level,
-                decision,
-                reason: format!(
-                    "{} (recorded after the agent stopped waiting)",
-                    match decision {
-                        Decision::AllowOnce => "Approved by an approval surface",
-                        Decision::AllowSimilar =>
-                            "Approved, and similar commands allowed from now on",
-                        Decision::BlockSimilar =>
-                            "Denied, and similar commands denied from now on",
-                        _ => "Denied by an approval surface",
-                    }
-                ),
-                duration_ms: (now - request.created_at).num_milliseconds(),
-            };
-            if let Err(err) = state.audit.insert(&event) {
-                eprintln!("failed to persist late decision: {err:#}");
-            }
+            record_late_decision(&state, decided.request, decision);
         }
     }
     Json(DecideResponse { ok })
+}
+
+/// Writes the audit event for a decision that arrived after the agent gave up.
+///
+/// Shared by every surface that can answer a request out of band - the HTTP
+/// decide endpoint and a notification button - because a decision going
+/// unrecorded depending on which one you used would be a hole in the receipt.
+fn record_late_decision(state: &Arc<AppState>, request: ApprovalRequest, decision: Decision) {
+    let now = Utc::now();
+    let event = AuditEvent {
+        id: agent_gate_policy::new_id("evt"),
+        request_id: request.id.clone(),
+        timestamp: now,
+        agent_id: request.agent.id.clone(),
+        project_path: request.project.path.clone(),
+        command: request.action.command.clone(),
+        risk_level: request.risk.level,
+        decision,
+        reason: format!(
+            "{} (recorded after the agent stopped waiting)",
+            match decision {
+                Decision::AllowOnce => "Approved by an approval surface",
+                Decision::AllowSimilar => "Approved, and similar commands allowed from now on",
+                Decision::BlockSimilar => "Denied, and similar commands denied from now on",
+                _ => "Denied by an approval surface",
+            }
+        ),
+        duration_ms: (now - request.created_at).num_milliseconds(),
+    };
+    if let Err(err) = state.audit.insert(&event) {
+        eprintln!("failed to persist late decision: {err:#}");
+    }
+}
+
+/// Answers a request using a single-use capability from a notification button.
+///
+/// Deliberately outside the pairing-token layer: the token in the path *is*
+/// the authorisation, and it can do exactly one thing once. That is what lets
+/// a button survive a trip through a relay without handing over approval
+/// authority for everything else.
+async fn act(
+    State(state): State<Arc<AppState>>,
+    Path(token): Path<String>,
+) -> Response {
+    let Some(grant) = state.grants.redeem(&token) else {
+        // Already used, already answered, or never real - all the same from
+        // out here, so none of them says which.
+        return (StatusCode::NOT_FOUND, "That button is no longer valid.").into_response();
+    };
+    let decided = state.pending.decide(&grant.request_id, grant.decision);
+    state.grants.revoke_for(&grant.request_id);
+    if decided.is_none() {
+        return (StatusCode::GONE, "That request is no longer waiting.").into_response();
+    }
+    state.notify_change();
+    if let Some(decided) = decided {
+        if !decided.delivered {
+            record_late_decision(&state, decided.request, grant.decision);
+        }
+    }
+    (
+        StatusCode::OK,
+        format!("Recorded: {}.", grant.decision),
+    )
+        .into_response()
 }
 
 async fn approve(
@@ -241,6 +287,7 @@ async fn approve(
         PolicyDecision::Ask => {
             let rx = state.pending.insert(request.clone());
             state.notify_change();
+            crate::notify::spawn_for(&state, &request);
             let wait = tokio::time::timeout(
                 std::time::Duration::from_secs(state.agent_wait_seconds.max(0) as u64),
                 rx,
@@ -393,6 +440,12 @@ fn percent_decode(value: &str) -> String {
     out
 }
 
+fn act_route(state: Arc<AppState>) -> Router<Arc<AppState>> {
+    Router::new()
+        .route("/act/:token", post(act).get(act))
+        .with_state(state)
+}
+
 fn api_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
     Router::new()
         .route("/health", get(health))
@@ -408,6 +461,7 @@ fn api_routes(state: Arc<AppState>) -> Router<Arc<AppState>> {
 pub fn build_router(state: Arc<AppState>) -> Router {
     api_routes(Arc::clone(&state))
         .route("/", get(ui))
+        .merge(act_route(Arc::clone(&state)))
         .with_state(state)
 }
 
@@ -424,6 +478,7 @@ pub fn build_network_router(state: Arc<AppState>) -> Router {
             require_token,
         ))
         .merge(Router::new().route("/", get(ui)))
+        .merge(act_route(Arc::clone(&state)))
         .with_state(state)
 }
 

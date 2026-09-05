@@ -21,3 +21,4 @@ anyhow.workspace = true
 chrono.workspace = true
 shell-words.workspace = true
 toml_edit.workspace = true
+reqwest.workspace = true

@@ -50,7 +50,7 @@ pub fn run(port: u16, show_token: bool) -> Result<()> {
 
 /// Best-effort local IPv4 addresses, read from `ifconfig` to avoid pulling in
 /// a networking crate for one diagnostic.
-fn local_addresses() -> Vec<String> {
+pub fn local_addresses() -> Vec<String> {
     let output = match std::process::Command::new("ifconfig").output() {
         Ok(o) => o,
         Err(_) => return Vec::new(),
