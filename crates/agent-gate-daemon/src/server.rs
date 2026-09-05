@@ -2,8 +2,8 @@ use crate::audit_store::AuditStore;
 use crate::pending::PendingStore;
 use crate::pairing;
 use agent_gate_policy::{
-    classify, ActionInfo, AgentInfo, ApprovalRequest, AuditEvent, Decision, PolicyConfig,
-    PolicyDecision, ProjectInfo,
+    classify, ActionInfo, AgentInfo, ApprovalRequest, AuditEvent, Decision, LearnedStore,
+    PolicyConfig, PolicyDecision, ProjectInfo,
 };
 use axum::extract::Path;
 use axum::http::{header, Request, StatusCode};
@@ -36,9 +36,34 @@ pub struct AppState {
     /// Bearer token required on network listeners. The Unix socket is exempt:
     /// reaching it already implies local access as this user.
     pub token: String,
+    /// Where rules learned from human decisions persist. The file is the
+    /// single source of truth - see [`load_learned`] - and this lock only
+    /// serialises the read-modify-write when a new rule is learned.
+    pub learned_path: PathBuf,
+    pub learned_lock: std::sync::Mutex<()>,
     /// Fires whenever the pending queue changes, so approval surfaces can be
     /// pushed to rather than poll.
     pub changes: broadcast::Sender<()>,
+}
+
+/// Reads the learned rules from disk.
+///
+/// Deliberately read per request rather than cached in memory: a rule that
+/// silently allows commands has to be revocable *now*, so `agent-gate policy
+/// forget` must take effect without a daemon restart. The file is small and
+/// approvals are human-paced, so the read costs nothing that matters.
+///
+/// A file that cannot be parsed yields no rules at all. Learned allows stop
+/// applying, which asks more rather than less - but learned denies stop too,
+/// which is why this failure is loud rather than silent.
+fn load_learned(path: &std::path::Path) -> LearnedStore {
+    LearnedStore::load(path).unwrap_or_else(|err| {
+        eprintln!(
+            "failed to read learned rules from {}, continuing with none: {err:#}",
+            path.display()
+        );
+        LearnedStore::default()
+    })
 }
 
 impl AppState {
@@ -96,12 +121,35 @@ async fn decide_pending(
 ) -> Json<DecideResponse> {
     let decision = match payload.decision.as_str() {
         "allow" | "allow_once" => Decision::AllowOnce,
+        "allow_similar" => Decision::AllowSimilar,
+        "block_similar" | "deny_similar" => Decision::BlockSimilar,
         _ => Decision::DenyOnce,
     };
     let outcome = state.pending.decide(&id, decision);
     let ok = outcome.is_some();
     if let Some(decided) = outcome {
         state.notify_change();
+        // "Similar" decisions teach the gate. The rule is scoped to the project
+        // the command came from, and can never override the catastrophic tier.
+        if let Some(learned_decision) = match decision {
+            Decision::AllowSimilar => Some(PolicyDecision::Allow),
+            Decision::BlockSimilar => Some(PolicyDecision::Deny),
+            _ => None,
+        } {
+            let _guard = state
+                .learned_lock
+                .lock()
+                .expect("learned policy lock poisoned");
+            let mut store = load_learned(&state.learned_path);
+            store.learn(
+                &decided.request.project.path,
+                &decided.request.action.command,
+                learned_decision,
+            );
+            if let Err(err) = store.save(&state.learned_path) {
+                eprintln!("failed to persist learned rule: {err:#}");
+            }
+        }
         // If the agent is still waiting, its own handler writes the audit
         // event. If it has already fallen back, nobody else will - and a human
         // decision must never go unrecorded just because it arrived late.
@@ -121,6 +169,10 @@ async fn decide_pending(
                     "{} (recorded after the agent stopped waiting)",
                     match decision {
                         Decision::AllowOnce => "Approved by an approval surface",
+                        Decision::AllowSimilar =>
+                            "Approved, and similar commands allowed from now on",
+                        Decision::BlockSimilar =>
+                            "Denied, and similar commands denied from now on",
                         _ => "Denied by an approval surface",
                     }
                 ),
@@ -145,9 +197,12 @@ async fn approve(
         .unwrap_or_else(|| payload.project_path.clone());
 
     let risk = classify(&payload.command, payload.git_branch.as_deref());
-    let policy_config = PolicyConfig::load_from_dir(&PathBuf::from(&payload.project_path))
+    let project_config = PolicyConfig::load_from_dir(&PathBuf::from(&payload.project_path))
         .unwrap_or_default();
-    let policy_outcome = policy_config.evaluate(&payload.command, payload.git_branch.as_deref(), risk.level);
+    let learned_rules = load_learned(&state.learned_path).rules_for(&payload.project_path);
+    let policy_config = project_config.with_learned(learned_rules);
+    let policy_outcome =
+        policy_config.evaluate(&payload.command, payload.git_branch.as_deref(), risk.level);
 
     let request = ApprovalRequest {
         id: agent_gate_policy::new_id("req"),
@@ -168,6 +223,10 @@ async fn approve(
         },
         risk: risk.clone(),
         policy: policy_outcome.clone(),
+        similar_scope: format!(
+            "{}, in this project",
+            agent_gate_policy::learned::derive_match(&payload.command).describe()
+        ),
     };
 
     let (decision, reason) = match policy_outcome.decision {
@@ -191,6 +250,12 @@ async fn approve(
                 Ok(Ok(decision)) => {
                     let reason = match decision {
                         Decision::AllowOnce => "Approved by an approval surface".to_string(),
+                        Decision::AllowSimilar => {
+                            "Approved, and similar commands allowed from now on".to_string()
+                        }
+                        Decision::BlockSimilar => {
+                            "Denied, and similar commands denied from now on".to_string()
+                        }
                         _ => "Denied by an approval surface".to_string(),
                     };
                     (decision, reason)

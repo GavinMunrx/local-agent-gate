@@ -12,3 +12,6 @@ ulid.workspace = true
 shell-words.workspace = true
 regex.workspace = true
 anyhow.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

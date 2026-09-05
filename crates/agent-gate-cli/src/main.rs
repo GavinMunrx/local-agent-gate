@@ -42,6 +42,11 @@ enum Command {
         #[arg(long, default_value_t = 20)]
         limit: i64,
     },
+    /// Inspect or revoke rules learned from "allow similar" decisions.
+    Policy {
+        #[command(subcommand)]
+        action: PolicyAction,
+    },
     /// Install, remove, or inspect the agent hook wiring.
     Adapters {
         #[command(subcommand)]
@@ -52,6 +57,16 @@ enum Command {
         #[command(subcommand)]
         agent: HookAgent,
     },
+}
+
+#[derive(Subcommand)]
+enum PolicyAction {
+    /// Show every learned rule.
+    List,
+    /// Remove one learned rule.
+    Forget { id: String },
+    /// Remove every learned rule.
+    ForgetAll,
 }
 
 #[derive(Subcommand)]
@@ -137,6 +152,11 @@ async fn main() -> anyhow::Result<()> {
         Command::Audit { limit } => {
             commands::audit::run(limit)?;
         }
+        Command::Policy { action } => match action {
+            PolicyAction::List => commands::policy::list()?,
+            PolicyAction::Forget { id } => commands::policy::forget(&id)?,
+            PolicyAction::ForgetAll => commands::policy::forget_all()?,
+        },
         Command::Adapters { action } => {
             let project = std::env::current_dir()?;
             match action {

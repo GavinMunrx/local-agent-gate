@@ -36,4 +36,7 @@ struct PendingRequest: Codable, Identifiable {
     let action: ActionInfo
     let risk: RiskInfo
     let policy: PolicyInfo
+    /// What "allow/block similar" would cover, worded by the daemon so every
+    /// approval surface shows the same scope.
+    let similarScope: String?
 }

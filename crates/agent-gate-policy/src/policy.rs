@@ -73,7 +73,7 @@ pub struct RuleMatch {
 }
 
 impl RuleMatch {
-    fn matches(&self, command: &str, branch: Option<&str>) -> bool {
+    pub fn matches(&self, command: &str, branch: Option<&str>) -> bool {
         if let Some(contains) = &self.command_contains {
             if !command.contains(contains.as_str()) {
                 return false;
@@ -112,6 +112,20 @@ impl PolicyConfig {
         let contents = std::fs::read_to_string(&path)?;
         let config: PolicyConfig = serde_yaml::from_str(&contents)?;
         Ok(config)
+    }
+
+    /// Returns a copy of this config with learned rules layered ahead of the
+    /// project's own.
+    ///
+    /// Ordering within the list does not decide the outcome - `evaluate`
+    /// considers every deny before any allow - so this only affects which rule
+    /// ids are reported when several match.
+    pub fn with_learned(&self, learned: Vec<PolicyRule>) -> PolicyConfig {
+        let mut merged = self.clone();
+        let mut rules = learned;
+        rules.extend(merged.rules.into_iter());
+        merged.rules = rules;
+        merged
     }
 
     /// Evaluates policy rules and risk defaults for a command.

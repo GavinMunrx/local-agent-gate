@@ -76,6 +76,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 denyItem.representedObject = request.id
                 submenu.addItem(denyItem)
 
+                // "Similar" answers teach the gate, so they are separated from
+                // the one-off answers and name their own scope: this is the
+                // only click here that changes what runs later without asking.
+                if let scope = request.similarScope, !scope.isEmpty {
+                    submenu.addItem(NSMenuItem.separator())
+                    let scopeItem = NSMenuItem(title: "Similar means \(scope)", action: nil, keyEquivalent: "")
+                    submenu.addItem(scopeItem)
+
+                    let allowSimilarItem = NSMenuItem(
+                        title: "Always Allow Similar",
+                        action: #selector(allowSimilar(_:)),
+                        keyEquivalent: ""
+                    )
+                    allowSimilarItem.target = self
+                    allowSimilarItem.representedObject = request.id
+                    submenu.addItem(allowSimilarItem)
+
+                    let blockSimilarItem = NSMenuItem(
+                        title: "Block Similar",
+                        action: #selector(blockSimilar(_:)),
+                        keyEquivalent: ""
+                    )
+                    blockSimilarItem.target = self
+                    blockSimilarItem.representedObject = request.id
+                    submenu.addItem(blockSimilarItem)
+                }
+
                 item.submenu = submenu
                 menu.addItem(item)
             }
@@ -101,6 +128,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func deny(_ sender: NSMenuItem) {
         decide(id: sender.representedObject as? String, decision: "deny_once")
+    }
+
+    @objc private func allowSimilar(_ sender: NSMenuItem) {
+        decide(id: sender.representedObject as? String, decision: "allow_similar")
+    }
+
+    @objc private func blockSimilar(_ sender: NSMenuItem) {
+        decide(id: sender.representedObject as? String, decision: "block_similar")
     }
 
     private func decide(id: String?, decision: String) {

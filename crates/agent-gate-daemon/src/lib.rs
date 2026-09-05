@@ -33,6 +33,7 @@ pub struct DaemonConfig {
     pub socket_path: PathBuf,
     pub db_path: PathBuf,
     pub token_path: PathBuf,
+    pub learned_path: PathBuf,
     pub agent_wait_seconds: i64,
     pub request_ttl_seconds: i64,
     pub reap_interval_seconds: u64,
@@ -42,11 +43,17 @@ pub struct DaemonConfig {
 }
 
 impl DaemonConfig {
-    pub fn new(socket_path: PathBuf, db_path: PathBuf, token_path: PathBuf) -> Self {
+    pub fn new(
+        socket_path: PathBuf,
+        db_path: PathBuf,
+        token_path: PathBuf,
+        learned_path: PathBuf,
+    ) -> Self {
         DaemonConfig {
             socket_path,
             db_path,
             token_path,
+            learned_path,
             agent_wait_seconds: DEFAULT_AGENT_WAIT_SECONDS,
             request_ttl_seconds: DEFAULT_REQUEST_TTL_SECONDS,
             reap_interval_seconds: DEFAULT_REAP_INTERVAL_SECONDS,
@@ -66,6 +73,8 @@ pub async fn run(config: DaemonConfig) -> anyhow::Result<()> {
         agent_wait_seconds: config.agent_wait_seconds,
         request_ttl_seconds: config.request_ttl_seconds,
         token,
+        learned_path: config.learned_path.clone(),
+        learned_lock: std::sync::Mutex::new(()),
         changes,
     });
 

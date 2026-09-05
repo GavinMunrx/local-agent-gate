@@ -19,3 +19,7 @@ pub fn db_path() -> PathBuf {
 pub fn token_path() -> PathBuf {
     app_dir().join("pairing-token")
 }
+
+pub fn learned_policy_path() -> PathBuf {
+    app_dir().join("learned-policy.yml")
+}

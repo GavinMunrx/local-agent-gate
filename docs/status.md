@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-09-02
+Last updated: 2026-09-04
 
 Tracks what is actually built against the milestones in
 [`local-agent-gate-design.md`](local-agent-gate-design.md). Machine-specific
@@ -17,12 +17,13 @@ setup (launchd, local wiring) is deliberately not here.
 - `.agent-gate.yml` policy engine with the documented precedence order. A
   `blocked`-tier risk always denies and cannot be overridden by a user rule.
 - Axum daemon over a Unix socket: `POST /approve` (classifies and evaluates
-  server-side, then auto-decides or parks on the pending queue and blocks until
-  resolved or a 5-minute expiry), `GET /pending`, `POST /pending/:id/decide`,
-  `GET /health`. Every decision persists to SQLite.
-- `agent-gate` CLI: `daemon`, `run -- <cmd>`, `approve`, `audit`,
-  `hook claude-code`.
-- 9 unit tests over the classifier and policy precedence.
+  server-side, then auto-decides or parks on the pending queue and blocks for
+  the agent wait), `GET /pending`, `POST /pending/:id/decide`, `GET /health`,
+  `GET /events`. Every decision persists to SQLite.
+- `agent-gate` CLI: `daemon`, `run -- <cmd>`, `approve`, `audit`, `hook`,
+  `adapters`, `policy`, `pair`.
+- Unit tests over the classifier, the shell parser, policy precedence and
+  learned rules.
 
 **MVP 1 / Milestone 3 — agent adapters.** Five agents, one queue.
 
@@ -92,9 +93,39 @@ setup (launchd, local wiring) is deliberately not here.
 - A decision that arrives after the agent stopped waiting is still recorded,
   with the receipt saying so. Before the split that was a rare race; it is now
   the normal path for anything approved away from the Mac.
-- 8 daemon integration tests drive the HTTP API in-process, including a
+- Daemon integration tests drive the HTTP API in-process, including a
   regression test that abandons a handler mid-flight the way a killed adapter
   does.
+
+**Learned rules — "allow similar".** Complete, and reachable from every
+surface.
+
+- Deciding a pending request with `allow_similar` or `block_similar` writes a
+  rule that answers the same shape of command without asking again. Offered by
+  the terminal (`agent-gate approve`) and the Mac menu bar; `agent-gate policy
+  list | forget | forget-all` reviews and revokes.
+- **The generalisation is mechanical, never fuzzy.** A single simple command
+  widens to its program plus a subcommand; anything compound, or anything that
+  redirects to a file, is pinned to its exact text. "Commands like `a && b`"
+  has no honest meaning, and `echo x > a` and `echo x > b` do not write to the
+  same place.
+- Rules are scoped to the project they were learned in, and cannot override the
+  built-in catastrophic tier - `evaluate` denies `blocked` risk before it
+  consults any rule at all. Both are asserted by tests.
+- **Revocation is immediate.** The daemon reads the rule file per request
+  rather than caching it, so `agent-gate policy forget` takes effect on the
+  next command instead of the next restart. A rule that silently allows
+  commands has to be revocable now. Writes go through a temp file and a rename,
+  so a per-request read can never catch a half-written file.
+- Every surface shows the scope *before* it is granted, worded by the daemon
+  (`similarScope` on the request) rather than derived separately by each
+  client. This is the only answer in the UI that changes what runs later
+  without asking, so it must not be a blind tap.
+- Verified live end to end: an `allow similar` from the terminal returned
+  `allow` to a waiting Claude Code hook, the next matching command was
+  auto-allowed in 50ms with the learned rule id in its receipt, `policy forget`
+  sent the following one back to the queue with the daemon still running, and
+  `rm -rf /` stayed blocked throughout.
 
 **MVP 2 — Mac app.** Partial, but the core loop is verified.
 
@@ -102,22 +133,20 @@ setup (launchd, local wiring) is deliberately not here.
   2s over the Unix socket via a hand-rolled POSIX socket + HTTP/1.1 client,
   since URLSession has no UDS support. Lists pending approvals with per-item
   Allow/Deny, shows daemon status, opens an audit log window.
+- Approval submenus carry Allow, Deny, Always Allow Similar and Block Similar,
+  the four actions the design doc's approval card specifies.
 - **Human-verified 2026-09-02.** A person clicked Allow on four queued
   approvals and Deny on a fifth, from the real menu bar. Each waiting client
   received its decision, and every click produced an audit receipt with the
   right risk level. This is Milestone 2's exit criterion ("user can install
   app, start daemon, approve from menu bar") met for the first time.
-- Still unverified by a human: the audit log window, and behaviour when the
-  daemon is stopped underneath a running app.
+- Still unverified by a human: the audit log window, the two new "similar"
+  menu items (the daemon side of them is verified from the terminal), and
+  behaviour when the daemon is stopped underneath a running app.
 
 ## Next
 
-Rough priority, ahead of new milestones:
-
-- **Adapter install UX.** `agent-gate adapters install claude-code` does not
-  exist; wiring is hand-edited today.
-
-Then, per the design doc's milestone order:
+Per the design doc's milestone order:
 
 1. **Milestone 3 is complete.** All five agents route through one queue and the
    wiring is managed by `agent-gate adapters`.
@@ -175,6 +204,9 @@ approve commands, so a user-owned tunnel is safer than an open LAN.
   own argv, not the parser's, so the audit field is unreliable for compound
   commands. Classification no longer depends on it, but `commandStartsWith`
   policy rules effectively assume a single simple command.
+- **A learned rule is keyed on the project's path.** Moving or renaming a
+  checkout silently drops its rules, which fails safe (more gets asked) but is
+  surprising. Learned rules also never expire.
 - **A decision on an already-reaped request is dropped.** Once the reaper has
   expired a request at its TTL, `POST /pending/:id/decide` returns `ok: false`.
   Decisions arriving before that are recorded whether or not an agent is still

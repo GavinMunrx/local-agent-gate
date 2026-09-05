@@ -84,6 +84,11 @@ pub struct ApprovalRequest {
     pub action: ActionInfo,
     pub risk: RiskAssessment,
     pub policy: PolicyOutcome,
+    /// What an "allow similar" or "block similar" answer would cover, in
+    /// words. Derived once by the daemon so every approval surface shows the
+    /// same scope instead of each deriving its own and drifting apart.
+    #[serde(rename = "similarScope")]
+    pub similar_scope: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

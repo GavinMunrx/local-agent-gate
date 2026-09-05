@@ -36,6 +36,8 @@ fn harness_with(agent_wait_seconds: i64, request_ttl_seconds: i64) -> Harness {
         agent_wait_seconds,
         request_ttl_seconds,
         token: TOKEN.to_string(),
+        learned_path: dir.path().join("learned.yml"),
+        learned_lock: std::sync::Mutex::new(()),
         changes,
     });
     Harness { state, dir }
@@ -52,6 +54,20 @@ impl Harness {
             "argv": command.split(' ').collect::<Vec<_>>(),
             "workingDirectory": self.dir.path().to_string_lossy(),
         })
+    }
+
+    /// Writes a learned rule the way `agent-gate policy` does: straight to the
+    /// file, with no daemon involvement.
+    fn teach(&self, command: &str, decision: agent_gate_policy::PolicyDecision) {
+        let path = self.state.learned_path.clone();
+        let mut store = agent_gate_policy::LearnedStore::load(&path).unwrap();
+        store.learn(&self.dir.path().to_string_lossy(), command, decision);
+        store.save(&path).unwrap();
+    }
+
+    /// Reads them back the same way.
+    fn learned(&self) -> agent_gate_policy::LearnedStore {
+        agent_gate_policy::LearnedStore::load(&self.state.learned_path).unwrap()
     }
 
     fn request(&self, method: &str, uri: &str, body: Value) -> Request<Body> {
@@ -388,4 +404,139 @@ async fn a_delivered_decision_is_audited_only_once() {
     let _ = waiter.await;
 
     assert_eq!(h.decisions(), vec![Decision::AllowOnce], "exactly one receipt");
+}
+
+// ------------------------------------------------------------ learned policy
+
+/// "Allow similar" has to actually change what happens next, or a watch tap is
+/// only ever informative.
+#[tokio::test]
+async fn allow_similar_auto_allows_the_next_matching_command() {
+    let h = harness_with(0, 600);
+    let first = h.call("POST", "/approve", h.submission("npm install left-pad")).await;
+    assert_eq!(first["decision"], json!("no_decision_yet"));
+
+    let id = h.state.pending.list()[0].id.clone();
+    h.call(
+        "POST",
+        &format!("/pending/{id}/decide"),
+        json!({ "decision": "allow_similar" }),
+    )
+    .await;
+
+    // A different package, same shape: no longer parks in the queue.
+    let second = h.call("POST", "/approve", h.submission("npm install right-pad")).await;
+    assert_eq!(second["decision"], json!("auto_allowed"));
+    assert!(h.state.pending.is_empty());
+}
+
+/// The learned rule must not reach beyond the project it came from.
+#[tokio::test]
+async fn a_learned_rule_does_not_leak_into_another_project() {
+    let h = harness_with(0, 600);
+    h.call("POST", "/approve", h.submission("npm install left-pad")).await;
+    let id = h.state.pending.list()[0].id.clone();
+    h.call(
+        "POST",
+        &format!("/pending/{id}/decide"),
+        json!({ "decision": "allow_similar" }),
+    )
+    .await;
+
+    let elsewhere = tempfile::tempdir().unwrap();
+    let foreign = json!({
+        "agent": { "id": "test", "name": "Test", "sessionId": "s1" },
+        "projectPath": elsewhere.path().to_string_lossy(),
+        "command": "npm install right-pad",
+        "argv": ["npm", "install", "right-pad"],
+        "workingDirectory": elsewhere.path().to_string_lossy(),
+    });
+    let body = h.call("POST", "/approve", foreign).await;
+    assert_eq!(
+        body["decision"],
+        json!("no_decision_yet"),
+        "the rule escaped the project it was learned in"
+    );
+}
+
+/// The catastrophic tier is not negotiable, however a rule was created.
+#[tokio::test]
+async fn a_learned_allow_cannot_unblock_a_catastrophic_command() {
+    let h = harness_with(0, 600);
+    // Teach a broad allow for the program.
+    h.teach("rm something", agent_gate_policy::PolicyDecision::Allow);
+    let payload = concat!("rm", " -rf ", "/");
+    let body = h.call("POST", "/approve", h.submission(payload)).await;
+    assert_eq!(body["decision"], json!("auto_blocked"));
+    assert_eq!(body["riskLevel"], json!("blocked"));
+}
+
+/// Deciding a compound command must not widen anything, because "similar" to a
+/// compound command is not a well-defined set.
+#[tokio::test]
+async fn allow_similar_on_a_compound_command_stays_exact() {
+    let h = harness_with(0, 600);
+    h.call("POST", "/approve", h.submission("cd sub && npm install left-pad")).await;
+    let id = h.state.pending.list()[0].id.clone();
+    h.call(
+        "POST",
+        &format!("/pending/{id}/decide"),
+        json!({ "decision": "allow_similar" }),
+    )
+    .await;
+
+    let same = h.call("POST", "/approve", h.submission("cd sub && npm install left-pad")).await;
+    assert_eq!(same["decision"], json!("auto_allowed"), "the exact command is allowed");
+
+    let different = h.call("POST", "/approve", h.submission("cd sub && npm install evil")).await;
+    assert_eq!(
+        different["decision"],
+        json!("no_decision_yet"),
+        "a different compound command must not ride the same rule"
+    );
+}
+
+/// `agent-gate policy forget` edits the file while the daemon runs. A rule that
+/// silently allows commands has to stop applying at once, not at the next
+/// restart - which is the whole reason the daemon reads this file per request.
+#[tokio::test]
+async fn forgetting_a_rule_takes_effect_without_a_restart() {
+    let h = harness_with(0, 600);
+    h.call("POST", "/approve", h.submission("npm install left-pad")).await;
+    let id = h.state.pending.list()[0].id.clone();
+    h.call(
+        "POST",
+        &format!("/pending/{id}/decide"),
+        json!({ "decision": "allow_similar" }),
+    )
+    .await;
+    let allowed = h.call("POST", "/approve", h.submission("npm install right-pad")).await;
+    assert_eq!(allowed["decision"], json!("auto_allowed"));
+
+    // Revoke out of band, exactly as the CLI does.
+    let mut store = h.learned();
+    let rule_id = store.rules[0].id.clone();
+    assert!(store.forget(&rule_id));
+    store.save(&h.state.learned_path).unwrap();
+
+    let asked = h.call("POST", "/approve", h.submission("npm install right-pad")).await;
+    assert_eq!(
+        asked["decision"],
+        json!("no_decision_yet"),
+        "the forgotten rule was still being applied"
+    );
+}
+
+/// The learned file is the source of truth, so a rule taught by any surface
+/// applies to the very next request.
+#[tokio::test]
+async fn a_rule_written_by_the_cli_applies_immediately() {
+    let h = harness_with(0, 600);
+    let before = h.call("POST", "/approve", h.submission("npm install rimraf")).await;
+    assert_eq!(before["decision"], json!("no_decision_yet"));
+
+    h.teach("npm install rimraf", agent_gate_policy::PolicyDecision::Allow);
+
+    let after = h.call("POST", "/approve", h.submission("npm install rimraf")).await;
+    assert_eq!(after["decision"], json!("auto_allowed"));
 }

@@ -1,9 +1,11 @@
 pub mod classifier;
+pub mod learned;
 pub mod policy;
 pub mod shell;
 pub mod types;
 
 pub use classifier::classify;
+pub use learned::LearnedStore;
 pub use policy::PolicyConfig;
 pub use types::*;
 

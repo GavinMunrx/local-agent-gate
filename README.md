@@ -37,7 +37,7 @@ classified `blocked` is denied unconditionally — no user rule can override it.
 
 | Path | What it is |
 | --- | --- |
-| `crates/agent-gate-policy` | Rule-based risk classifier (low/medium/high/blocked) and the `.agent-gate.yml` policy engine |
+| `crates/agent-gate-policy` | Rule-based risk classifier (low/medium/high/blocked), the `.agent-gate.yml` policy engine, and rules learned from decisions |
 | `crates/agent-gate-daemon` | Axum HTTP server over a Unix socket; pending-approval queue; SQLite audit log |
 | `crates/agent-gate-cli` | The `agent-gate` binary: daemon, command wrapper, agent adapters, terminal approvals, audit viewer |
 | `apps/mac/LocalAgentGateMac` | AppKit menu bar app — pending approvals with Allow/Deny, daemon status, audit log |
@@ -119,6 +119,38 @@ Drop an `.agent-gate.yml` in a repo to override the defaults. See
 first: built-in `blocked` risks → deny rules → allow rules → ask rules →
 per-risk-level defaults.
 
+### Learned rules
+
+Answering an approval with **allow similar** or **block similar** writes a rule,
+so the same shape of command is not asked about again. Every approval surface
+offers it, and shows the scope before you grant it:
+
+```
+Similar:      commands starting with `npm install`, in this project
+
+  [y] allow once          [s] allow similar from now on
+  [n] deny (default)      [b] block similar from now on
+```
+
+The generalisation is narrow and mechanical, never a guess. A single simple
+command widens to its program and subcommand; anything compound, or anything
+that redirects to a file, is pinned to its exact text, because "commands like
+`a && b`" has no honest meaning. Rules are scoped to the project they were
+learned in, so approving something in a scratch repo cannot loosen a production
+one, and a learned rule can never override the built-in `blocked` tier.
+
+Review and revoke them:
+
+```sh
+agent-gate policy list
+agent-gate policy forget <id>
+agent-gate policy forget-all
+```
+
+Revocation takes effect on the next command, not the next daemon restart: the
+daemon re-reads the rule file on every request, precisely because a rule that
+silently allows commands has to be revocable now.
+
 ## Approving from another device
 
 Off by default. To let a phone (or eventually a watch) approve:
@@ -145,6 +177,7 @@ Lives in `~/Library/Application Support/local-agent-gate/`:
 
 - `agent-gate.sock` — the daemon's Unix socket
 - `audit.db` — SQLite audit log
+- `learned-policy.yml` — rules from "allow similar" / "block similar"
 
 Don't delete that directory while the daemon is running; the process survives
 but its socket doesn't, and every client gets connection-refused until the
